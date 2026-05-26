@@ -1,0 +1,62 @@
+{
+  "meta": {
+    "source": "regression-baseline для flow_diagram_native (v1.6+)",
+    "rationale": "Минимальная схема: 4 блока в строку + 3 горизонтальные стрелки + 1 пунктирная группа + декор."
+  },
+  "slides": [
+    {
+      "slide_type": "flow_diagram_native",
+      "dark": false,
+      "flow": {
+        "header": "Pipeline аналитики",
+        "subtitle": "regression baseline — flow_diagram_native v1.6",
+        "blocks": [
+          {
+            "id": "b1",
+            "x": 35, "y": 200, "w": 235, "h": 80,
+            "lines": ["Сырые диалоги", "28 782 чата"],
+            "font_sizes": [13, 11],
+            "bolds": [true, false]
+          },
+          {
+            "id": "b2",
+            "x": 295, "y": 200, "w": 235, "h": 80,
+            "lines": ["1. Ловим сломанное", "26 паттернов"],
+            "font_sizes": [13, 11],
+            "bolds": [true, false]
+          },
+          {
+            "id": "b3",
+            "x": 555, "y": 200, "w": 235, "h": 80,
+            "lines": ["2. Реальные состояния", "9 наблюдаемых"],
+            "font_sizes": [13, 11],
+            "bolds": [true, false]
+          },
+          {
+            "id": "b4",
+            "x": 815, "y": 200, "w": 235, "h": 80,
+            "lines": ["3. Mining таксономии", "Embedding + LLM"],
+            "font_sizes": [13, 11],
+            "bolds": [true, false]
+          }
+        ],
+        "arrows": [
+          {"from": "b1", "to": "b2", "side": "right"},
+          {"from": "b2", "to": "b3", "side": "right"},
+          {"from": "b3", "to": "b4", "side": "right"}
+        ],
+        "groups": [
+          {"label": "Phase 1", "x": 27, "y": 174, "w": 251, "h": 116}
+        ],
+        "decor": {
+          "enabled": true,
+          "count": 4,
+          "x_start": 30,
+          "y_start": 625,
+          "size": 38,
+          "gap": 12
+        }
+      }
+    }
+  ]
+}

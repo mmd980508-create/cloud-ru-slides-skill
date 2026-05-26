@@ -228,3 +228,75 @@ Pipeline полностью функционален end-to-end: parse → plan 
 - `feedback_audit_p0_p1_done.md` — какие пункты аудита внедрены, какие отложены.
 - Обновлён `project_environment_status.md` — pyyaml/matplotlib/pymupdf уже установлены.
 
+## v1.6 — 2026-05-26 — Flow diagrams / схемы (native, editable)
+
+**Проблема:** до v1.6 скилл умел только charts (`chart_pptx_native`), KPI
+(`kpi_native`) и images (`image_native`). Схемы / блок-диаграммы / pipeline
+рисовать был не способен — приходилось вставлять PNG, что неоптимально:
+не редактируется в PowerPoint, не консистентно с brand-стилем.
+
+**Контекст:** в соседней сессии (заблокирована из-за `Image is too large >2000px`
+после рендера в PNG) пользователь экспериментально вручную написал
+`output/flow_diagrams/build_flow.py` — 492-строчный скрипт, который рисует
+2 эталонные схемы (SGR + Pipeline аналитики) через примитивы python-pptx:
+серые блоки, чёрные стрелки с маленьким наконечником, пунктирные группы
+Phase 1/2, зелёные L-уголки декор. Результаты `sgr_schema.png` и
+`analytics_pipeline.png` сохранены в `references/flow_diagrams/`.
+
+**Решение:** новый `slide_type: "flow_diagram_native"` через модуль
+`scripts/flow_renderer.py`. Примитивы (`add_block`, `add_arrow`,
+`add_dashed_rect`, `add_label`, `add_header`, `add_top_separator`,
+`add_decor_diagonals`) вынесены из эксперимента в переиспользуемые
+функции + высокоуровневая `render_flow_diagram_slide(slide, config, dark)`.
+
+**Реализация:**
+- [scripts/flow_renderer.py](pptx-skill/scripts/flow_renderer.py) — новый модуль:
+  - Низкоуровневые примитивы: `add_block(fill: gray|white|green|dark)`,
+    `add_label`, `add_arrow(with_head, dashed)`, `add_dashed_rect`,
+    `add_header(dark)`, `add_top_separator`, `add_decor_diagonals`.
+  - Высокоуровневая `render_flow_diagram_slide(slide, flow_config, dark)`:
+    собирает header → blocks (с id) → groups (dashed rects + labels) →
+    arrows (by ref `from`/`to` либо по координатам) → labels → decor.
+  - Палитра грузится из `brand/palette.json` (единый источник истины).
+  - Standalone CLI: `python3 flow_renderer.py <flow_config.json> <template.pptx> <out.pptx>`.
+- [scripts/build_v9.py](pptx-skill/scripts/build_v9.py):
+  - Импорт `render_flow_diagram_slide` (try/except → `FLOW_RENDERER_AVAILABLE`).
+  - `flow_diagram_native` добавлен в список native types (использует blank donor).
+  - Новая ветка в pipeline между `chart_pptx_native` и `chart_native`.
+- [scripts/validate_plan.py](pptx-skill/scripts/validate_plan.py):
+  - `flow_diagram_native` принят как native type (требует поля `flow`).
+  - Дополнительные проверки: блоки в canvas 1280×720, минимальный размер
+    блока (w≥60, h≥24), arrow-refs `from`/`to` соответствуют block.id.
+- [agents/02-slide-classifier.md](pptx-skill/agents/02-slide-classifier.md):
+  - Триггеры для авто-детекции: intent ∈ {schema, flow, pipeline, process,
+    architecture}, key_phrase содержит «схема/архитектура/pipeline/процесс»,
+    источник содержит SmartArt или прямоугольники + connectors.
+  - Routing decision tree обновлён (приоритет ниже chart, выше KPI).
+  - Композиционные подсказки (≤ 8 блоков → иначе split, gap 22px, etc.).
+- [SKILL.md](pptx-skill/SKILL.md):
+  - Таблица скриптов: новый `flow_renderer.py` ⭐.
+  - Раздел native slide types: JSON-схема `flow_diagram_native`.
+  - Canonical правило v1.6 — editable schemas, PNG-вставка запрещена.
+- [references/flow_diagrams/](pptx-skill/references/flow_diagrams/) — эталонные
+  PNG (sgr_schema, analytics_pipeline) + README с canonical критериями PASS.
+- [tests/baselines/flow_diagram/](pptx-skill/tests/baselines/flow_diagram/) —
+  регрессионный тест.
+
+**Что НЕ перенесено в репо:**
+- Сам `flow_diagrams.pptx` (10MB) и `build_flow.py` — остались в `output/`
+  (gitignored). `build_flow.py` — это эксперимент с захардкоженными
+  координатами под 2 конкретные схемы; правильный путь — JSON-конфиг через
+  новый renderer. Эталонные PNG сохранены в `references/`.
+
+**Стиль (canonical):** идентичен build_flow.py, который пользователь утвердил
+визуально. Палитра подтянута из `brand/palette.json`, не дублирована.
+
+**Уроки в memory:**
+- Эксперименты с native rendering из output-папки нужно вытаскивать в
+  `scripts/<feature>_renderer.py` через паттерн «примитивы + высокоуровневая
+  функция, принимающая JSON-config». Такой паттерн уже работает для
+  KPI/chart/image — flow стал четвёртым.
+- Координаты блоков в эксперименте захардкожены под конкретные слайды;
+  в продакшене ответственность за layout-расчёт лежит на Layout Designer
+  (агент 04) или на самом Slide Classifier при детекции flow.
+

@@ -36,18 +36,60 @@ def validate_slide(slide_idx, slide, donors):
     errors, warnings = [], []
 
     # v0.20+: native slide types не используют clone_from_slide
-    # (kpi_native, image_native, chart_native, chart_pptx_native — рендерятся через build_v9 с blank donor)
+    # (kpi_native, image_native, chart_native, chart_pptx_native, flow_diagram_native
+    #  — рендерятся через build_v9 с blank donor)
     slide_type = slide.get("slide_type")
-    if slide_type in ("kpi_native", "image_native", "chart_native", "chart_pptx_native"):
+    if slide_type in ("kpi_native", "image_native", "chart_native",
+                       "chart_pptx_native", "flow_diagram_native"):
         # Проверяем наличие соответствующих data блоков
         data_key = {
             "kpi_native": "kpi",
             "image_native": "image",
             "chart_native": "chart",
             "chart_pptx_native": "chart",
+            "flow_diagram_native": "flow",
         }[slide_type]
         if data_key not in slide:
             errors.append(f"slide[{slide_idx}]: slide_type={slide_type} требует поля '{data_key}'")
+            return slide, errors, warnings
+
+        # Doer-проверки для flow_diagram_native
+        if slide_type == "flow_diagram_native":
+            flow = slide.get("flow", {})
+            if not flow.get("header"):
+                warnings.append(
+                    f"slide[{slide_idx}]: flow_diagram_native без header — слайд без заголовка"
+                )
+            blocks = flow.get("blocks", [])
+            if not blocks:
+                errors.append(
+                    f"slide[{slide_idx}]: flow_diagram_native без blocks — схема пустая"
+                )
+            # Canonical bounds check (slide 1280×720)
+            for i, blk in enumerate(blocks):
+                x = blk.get("x", 0); y = blk.get("y", 0)
+                w = blk.get("w", 0); h = blk.get("h", 0)
+                if x < 0 or y < 0 or x + w > 1280 or y + h > 720:
+                    warnings.append(
+                        f"slide[{slide_idx}].blocks[{i}]: блок вне канваса 1280×720 "
+                        f"({x},{y},{w},{h})"
+                    )
+                if w < 60 or h < 24:
+                    warnings.append(
+                        f"slide[{slide_idx}].blocks[{i}]: блок слишком мелкий "
+                        f"(w={w}, h={h}) — текст может не уместиться"
+                    )
+            # Arrows: ref-консистентность
+            block_ids = {b["id"] for b in blocks if "id" in b}
+            for i, arr in enumerate(flow.get("arrows", [])):
+                if "from" in arr or "to" in arr:
+                    for key in ("from", "to"):
+                        if key in arr and arr[key] not in block_ids:
+                            errors.append(
+                                f"slide[{slide_idx}].arrows[{i}]: {key}='{arr[key]}' "
+                                f"не соответствует ни одному block.id"
+                            )
+
         return slide, errors, warnings
 
     donor_id = slide.get("clone_from_slide")

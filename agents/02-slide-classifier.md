@@ -110,6 +110,58 @@ Output:
 }}
 ```
 
+### `slide_type: "flow_diagram_native"` ⭐ (v1.6+)
+Триггеры (любой):
+- В draft присутствует **схема / блок-диаграмма / процесс**: блоки + стрелки между ними
+- intent = `schema` / `flow` / `pipeline` / `process` / `architecture`
+- key_phrase содержит «схема», «архитектура», «pipeline», «flow», «процесс»,
+  «стадии», «этапы», «phases»
+- Source slide содержит SmartArt, либо группу прямоугольников + connectors
+
+**Назначение:** редактируемая схема прямо средствами PowerPoint — пользователь
+может двигать блоки, переписывать текст в них, переподключать стрелки.
+Не PNG-картинка.
+
+Output:
+```json
+{"slide_type": "flow_diagram_native", "dark": false, "flow": {
+  "header": "Pipeline Architecture",
+  "subtitle": "опц. подзаголовок 11pt",
+  "subtitle_url": "опц. https://... 9pt серым",
+  "blocks": [
+    {"id": "b1", "x": 35, "y": 180, "w": 240, "h": 60,
+     "lines": ["Parse Input"], "font_sizes": [13], "bolds": [true]},
+    {"id": "b2", "x": 320, "y": 180, "w": 240, "h": 60,
+     "lines": ["Plan"], "font_sizes": [13], "bolds": [true]}
+  ],
+  "arrows": [
+    {"from": "b1", "to": "b2", "side": "right"}
+  ],
+  "groups": [
+    {"label": "Phase 1", "x": 27, "y": 154, "w": 256, "h": 100}
+  ],
+  "labels": [
+    {"x": 35, "y": 122, "w": 600, "h": 20, "text": "подпись",
+     "font_size": 11, "bold": false, "align": "left"}
+  ],
+  "decor": {"enabled": true, "x_start": 950, "y_start": 625,
+            "count": 4, "size": 38, "gap": 12}
+}}
+```
+
+**Композиция (canonical):**
+- Slide canvas — 1280×720 px. Все x/y/w/h в пикселях.
+- Блоки серые (#F2F2F2), текст графит (#222222), стрелки чёрные 1pt.
+- Заголовок 20pt SemiBold CAPS, top-left (auto добавляется через `header`).
+- Группировка фаз — пунктирный rect через `groups[]`.
+- Декор Cloud.ru (зелёные L-уголки) — опц., через `decor.enabled=true`.
+
+**Композиционные подсказки для классификатора:**
+- 3–4 блока в строку → колонки шириной ~235px, gap 22px, X start 175 (если есть тег слева) или 35
+- 2 строки блоков → row 1 на y=180, row 2 на y=270, vertical arrows между серединами
+- ≤ 8 блоков на слайде — иначе split на 2 слайда
+- Подписи блоков ≤ 4 строк по 30 символов
+
 **Если нет triggers** для native — использовать стандартный flow `clone_from_slide` (donor catalog).
 
 ## Routing decision tree
@@ -117,6 +169,7 @@ Output:
 ```
 Есть chart-like data (series, axis)? → chart_pptx_native (DEFAULT, editable)
   fallback chart_native только если нужен PNG со спец-эффектами
+Есть схема/процесс/архитектура с блоками+стрелками? → flow_diagram_native (v1.6+)
 Есть 1-3 KPI числа без текста-параграфа? → kpi_native
 Есть embedded image как main content? → image_native
 Иначе → standard category + clone_from_slide donor

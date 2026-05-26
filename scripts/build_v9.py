@@ -50,6 +50,12 @@ try:
 except ImportError:
     CHART_NATIVE_PPTX_AVAILABLE = False
 
+try:
+    from flow_renderer import render_flow_diagram_slide
+    FLOW_RENDERER_AVAILABLE = True
+except ImportError:
+    FLOW_RENDERER_AVAILABLE = False
+
 EMU_PER_PX = 9525
 
 
@@ -123,7 +129,7 @@ def build(plan_path, template_path, output_path, donor_map_path):
     cloned_for_plan = []
     for ps in plan["slides"]:
         slide_type = ps.get("slide_type")
-        if slide_type in ("kpi_native", "image_native", "chart_native", "chart_pptx_native"):
+        if slide_type in ("kpi_native", "image_native", "chart_native", "chart_pptx_native", "flow_diagram_native"):
             dark = ps.get("dark", False)
             blank_idx = (BLANK_DONOR_DARK if dark else BLANK_DONOR_WHITE)
             if 1 <= blank_idx <= len(original_slides):
@@ -179,6 +185,16 @@ def build(plan_path, template_path, output_path, donor_map_path):
             dark = plan_slide.get("dark", False)
             clean_slide_to_blank(actual)
             render_chart_pptx_slide(actual, chart_config, dark=dark)
+            continue
+        if slide_type == "flow_diagram_native":
+            if not FLOW_RENDERER_AVAILABLE:
+                print("WARN: flow_renderer модуль недоступен — flow_diagram_native пропущен",
+                      file=sys.stderr)
+                continue
+            flow_config = plan_slide.get("flow", {})
+            dark = plan_slide.get("dark", False)
+            clean_slide_to_blank(actual)
+            render_flow_diagram_slide(actual, flow_config, dark=dark)
             continue
         if slide_type == "chart_native":
             if not CHART_AVAILABLE:

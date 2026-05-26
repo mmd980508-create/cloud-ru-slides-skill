@@ -163,6 +163,7 @@ PHASE 3 — GLOBAL VERIFICATION (один раз в конце):
 | **`image_renderer.py`** | **Image-as-content auto-fit (mode: fit/fill, опц. caption в серой плашке)** |
 | **`chart_native_pptx.py`** ⭐ | **DEFAULT для charts (v1.4+). Редактируемая PowerPoint chart через `pptx.chart.add_chart()` — пользователь меняет данные через Edit Data → Excel. Поддержка: area_stacked/area_100/bar/bar_stacked/line/pie** |
 | `chart_engine.py` | Legacy: Matplotlib chart redraw в PNG (canonical pastel palette). Использовать ТОЛЬКО когда нужны custom annotations или прозрачные overlapping areas, которые native chart не умеет |
+| **`flow_renderer.py`** ⭐ | **v1.6+. Редактируемые схемы / блок-диаграммы / process maps через примитивы PowerPoint (blocks, arrows, dashed groups). slide_type: flow_diagram_native** |
 | `render_slides.py` | .pptx → PNG (LibreOffice) для визуальной проверки |
 | `brand_guardian.py` | Валидация цветов/шрифтов/композиции готового .pptx |
 | **`visual_validator_v2.py`** | **Pixel-level анализ rendered PNG (PIL): unfilled placeholders, off-palette > 15%, dominant bg** |
@@ -197,6 +198,28 @@ PHASE 3 — GLOBAL VERIFICATION (один раз в конце):
   "type": "area_stacked|bar|line|pie",
   "slide_title": "...", "x": [...], "series": [...], "accent_idx": N
 }}
+
+// ⭐ v1.6+ Редактируемые схемы / блок-диаграммы / process maps.
+// Блоки + стрелки + опц. пунктирные группы + декор. Все элементы редактируемые
+// в PowerPoint (можно подвинуть блок, переписать текст, переподключить стрелку).
+{"slide_type": "flow_diagram_native", "dark": false, "flow": {
+  "header": "Заголовок схемы",
+  "subtitle": "опц.", "subtitle_url": "опц.",
+  "blocks": [
+    {"id": "b1", "x": 175, "y": 180, "w": 235, "h": 50,
+     "lines": ["Title"], "font_sizes": [13], "bolds": [true]}
+  ],
+  "arrows": [
+    {"from": "b1", "to": "b2", "side": "right"},
+    {"x1": 100, "y1": 200, "x2": 300, "y2": 200,
+     "with_head": true, "dashed": false}
+  ],
+  "groups": [{"label": "Phase 1", "x": 167, "y": 154, "w": 251, "h": 86}],
+  "labels": [{"x": 35, "y": 122, "w": 600, "h": 22,
+              "text": "подпись", "font_size": 11, "align": "left"}],
+  "decor": {"enabled": true, "x_start": 950, "y_start": 625,
+            "count": 4, "size": 38, "gap": 12}
+}}
 ```
 
 ### Canonical правило v1.4 — editable charts
@@ -218,6 +241,20 @@ GREEN никогда не дублируется на не-accent серии.
 - KPI цифры → `kpi_native`
 - chart-like data (series, axis, time-data) → `chart_pptx_native` (DEFAULT)
 - main image (фото/скриншот) → `image_native`
+- схема / процесс / архитектура (блоки+стрелки) → `flow_diagram_native` ⭐ (v1.6+)
+
+### Canonical правило v1.6 — editable schemas
+
+**Все схемы и блок-диаграммы должны быть редактируемыми (`flow_diagram_native`).**
+Скилл рисует блоки, стрелки, пунктирные группы и декор как обычные PowerPoint
+shapes. Пользователь в PowerPoint может двигать блоки, менять текст, перекидывать
+стрелки — без перевыпуска файла. PNG-вставка схемы как картинки — **запрещена**.
+
+**Стиль (canonical):**
+- Блоки: серые `#F2F2F2` 1:1 с эталоном из той сессии, текст `#222222`
+- Стрелки: чёрные 1pt с маленьким треугольным наконечником
+- Группировка фаз: пунктирный rect `#888888`, label 10pt SemiBold по центру
+- Заголовок: 20pt SemiBold CAPS, top-left (35, 60) — общий стиль content слайдов
 
 ## Слой валидации (4 уровня)
 

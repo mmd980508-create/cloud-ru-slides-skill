@@ -1,0 +1,13 @@
+{
+  "_doc": "Regression baseline для flow_diagram_native (v1.6). Один слайд: 4 блока + 3 стрелки + 1 dashed-группа + декор. brand_guardian должен пройти PASS (всё в палитре), visual_validator_v2 — без issues.",
+  "n_slides": 1,
+  "brand_guardian": {
+    "verdict": "PASS",
+    "score_avg_min": 90.0,
+    "violations_max": 2
+  },
+  "visual_validator_v2_with_plan": {
+    "verdict": "PASS",
+    "total_issues_max": 1
+  }
+}

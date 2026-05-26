@@ -25,6 +25,7 @@ import unicodedata
 import math
 from pptx import Presentation
 from pptx.util import Emu
+from pptx.oxml.ns import qn
 
 
 # ---------------------------------------------------------------------------
@@ -428,12 +429,36 @@ def _shape_fill_hex(shape):
         return None
 
 
+def _line_has_arrowhead(shape):
+    """True если у line/connector есть <a:tailEnd> или <a:headEnd> с type != 'none'.
+    Декоративные линии (L-уголки, разделители) — без наконечника, не считаются стрелками."""
+    try:
+        spPr = shape._element.spPr
+        ln = spPr.find(qn("a:ln"))
+        if ln is None:
+            return False
+        for tag in ("tailEnd", "headEnd"):
+            end = ln.find(qn(f"a:{tag}"))
+            if end is not None:
+                etype = end.get("type")
+                # Если type явно "none" — наконечника нет; иначе (triangle/arrow/...) — есть
+                if etype and etype.lower() != "none":
+                    return True
+        return False
+    except Exception:
+        return False
+
+
 def _is_arrow_shape(shape):
-    """Стрелка = MSO_SHAPE_TYPE.LINE (прямая) ИЛИ AUTO_SHAPE с ARROW в auto_shape_type."""
+    """Стрелка = MSO_SHAPE_TYPE.LINE/CONNECTOR с реальным arrowhead ИЛИ
+    AUTO_SHAPE с ARROW в auto_shape_type.
+
+    Простые линии без наконечника (декор, разделители) — НЕ стрелки.
+    """
     from pptx.enum.shapes import MSO_SHAPE_TYPE
     try:
         if shape.shape_type == MSO_SHAPE_TYPE.LINE:
-            return True
+            return _line_has_arrowhead(shape)
         if shape.shape_type == MSO_SHAPE_TYPE.AUTO_SHAPE:
             ast = shape.auto_shape_type
             if ast is not None and "ARROW" in str(ast).upper():
