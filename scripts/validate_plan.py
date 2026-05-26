@@ -36,11 +36,11 @@ def validate_slide(slide_idx, slide, donors):
     errors, warnings = [], []
 
     # v0.20+: native slide types не используют clone_from_slide
-    # (kpi_native, image_native, chart_native, chart_pptx_native, flow_diagram_native
-    #  — рендерятся через build_v9 с blank donor)
+    # (kpi_native, image_native, chart_native, chart_pptx_native, flow_diagram_native,
+    #  table_native — рендерятся через build_v9 с blank donor)
     slide_type = slide.get("slide_type")
     if slide_type in ("kpi_native", "image_native", "chart_native",
-                       "chart_pptx_native", "flow_diagram_native"):
+                       "chart_pptx_native", "flow_diagram_native", "table_native"):
         # Проверяем наличие соответствующих data блоков
         data_key = {
             "kpi_native": "kpi",
@@ -48,6 +48,7 @@ def validate_slide(slide_idx, slide, donors):
             "chart_native": "chart",
             "chart_pptx_native": "chart",
             "flow_diagram_native": "flow",
+            "table_native": "table",
         }[slide_type]
         if data_key not in slide:
             errors.append(f"slide[{slide_idx}]: slide_type={slide_type} требует поля '{data_key}'")
@@ -79,6 +80,20 @@ def validate_slide(slide_idx, slide, donors):
                         f"slide[{slide_idx}].blocks[{i}]: блок слишком мелкий "
                         f"(w={w}, h={h}) — текст может не уместиться"
                     )
+                # Canonical v1.7: align=left, vanchor=top по умолчанию.
+                # Явный override на center/middle — WARN (требует обоснования).
+                blk_align = blk.get("align")
+                if blk_align in ("center", "right"):
+                    warnings.append(
+                        f"slide[{slide_idx}].blocks[{i}]: align='{blk_align}' "
+                        f"нарушает canonical (left+top). Используй только для header-плашек."
+                    )
+                blk_vanchor = blk.get("vanchor")
+                if blk_vanchor == "middle":
+                    warnings.append(
+                        f"slide[{slide_idx}].blocks[{i}]: vanchor='middle' "
+                        f"нарушает canonical (left+top). Используй только для header-плашек."
+                    )
             # Arrows: ref-консистентность
             block_ids = {b["id"] for b in blocks if "id" in b}
             for i, arr in enumerate(flow.get("arrows", [])):
@@ -89,6 +104,56 @@ def validate_slide(slide_idx, slide, donors):
                                 f"slide[{slide_idx}].arrows[{i}]: {key}='{arr[key]}' "
                                 f"не соответствует ни одному block.id"
                             )
+
+        # Doer-проверки для table_native (v1.8)
+        if slide_type == "table_native":
+            tbl = slide.get("table", {})
+            if not tbl.get("header"):
+                warnings.append(
+                    f"slide[{slide_idx}]: table_native без header — слайд без заголовка"
+                )
+            headers = tbl.get("headers", [])
+            data = tbl.get("data", [])
+            if not headers:
+                errors.append(
+                    f"slide[{slide_idx}]: table_native без headers — таблица без шапки"
+                )
+            if not data:
+                errors.append(
+                    f"slide[{slide_idx}]: table_native без data — таблица без строк"
+                )
+            n_cols = len(headers)
+            # Canonical триггер: ≥3 cols × ≥3 rows
+            if n_cols < 3:
+                warnings.append(
+                    f"slide[{slide_idx}]: table_native ≤2 cols (n={n_cols}). "
+                    f"Canonical триггер — ≥3 cols. Подумай о multicolumn или KPI."
+                )
+            if len(data) < 3:
+                warnings.append(
+                    f"slide[{slide_idx}]: table_native ≤2 data rows (n={len(data)}). "
+                    f"Canonical триггер — ≥3 rows."
+                )
+            # Кол-во ячеек в каждой строке = кол-ву headers
+            for i, row in enumerate(data):
+                if len(row) != n_cols:
+                    errors.append(
+                        f"slide[{slide_idx}].data[{i}]: {len(row)} ячеек, "
+                        f"ожидалось {n_cols} (по headers)"
+                    )
+            # Sanity: bounds
+            tx = tbl.get("x", 30); ty = tbl.get("y", 170)
+            tw = tbl.get("w", 1220); th = tbl.get("h")
+            if tx < 0 or tx + tw > 1280:
+                warnings.append(
+                    f"slide[{slide_idx}]: table выходит за горизонталь канваса "
+                    f"({tx}..{tx+tw} vs 0..1280)"
+                )
+            if th is not None and ty + th > 720:
+                warnings.append(
+                    f"slide[{slide_idx}]: table выходит за вертикаль канваса "
+                    f"({ty+th} vs 720)"
+                )
 
         return slide, errors, warnings
 

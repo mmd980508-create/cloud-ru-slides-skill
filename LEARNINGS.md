@@ -353,3 +353,74 @@ Phase 1/2, зелёные L-уголки декор. Результаты `sgr_s
 **Sync infrastructure (правило «закоммить» 2026-05-26):**
 - При коммите в `pptx-skill/` теперь автоматом синкается **установленная копия** (`~/Library/Application Support/Claude/.../skills/cloud-ru-slides/`) и обновляется **zip-снимок** на десктопе. См. `feedback_commit_workflow.md`.
 
+## v1.8 — 2026-05-26 — table_native (zebra) + anti-distortion safety
+
+**Контекст:** при тесте v1.7 на реальном файле `cloud-ru-schema-ai-yellow.pptx`
+(маркетинговая воронка из 28+ блоков) обнаружилось что:
+1. Скилл не умеет делать **настоящие PowerPoint таблицы** — только плашки через flow_diagram_native, без возможности редактировать таблицу как таблицу в PowerPoint.
+2. Скилл **самостоятельно искажает смысл** при упрощении: split схемы на 3 слайда был «принят без спроса», хотя пользователь хотела всё на одном слайде с табличной компоновкой.
+
+Также пользователь утвердила выбор canonical стиля для таблиц по slide 56
+шаблона Cloud.ru (zebra) и отказалась от прочих вариантов (53 gradient, 54
+expanded-row, 55 kpi-table, 57 RACI отдельно, 58 roadmap отдельно).
+
+### Изменения
+
+**Новый slide_type `table_native`:**
+- [scripts/table_renderer.py](pptx-skill/scripts/table_renderer.py) — новый модуль:
+  - `render_table_native(slide, table_config, dark)` собирает native PowerPoint таблицу через `slide.shapes.add_table()`.
+  - Zebra style как в slide 56: header row без заливки + bold 12pt, body rows чередуются `#F2F2F2` / белый.
+  - Vertical separators 0.5pt `#C8C8C8` между колонками (только справа от ячеек, кроме последней). Горизонтальных границ нет.
+  - Поля ячеек: L/R 12px, T/B 8px.
+  - Текст: SB Sans Display, **align=left, vanchor=top** (canonical, не override).
+  - Первая колонка 1.4× шире (опц. `first_col_wider: true`).
+  - Авто-расчёт высот: если `h` не задана — заполнить до safe-bottom; `row_height` = (avail_h - header_h) / n_rows.
+  - `_strip_default_table_style()` убирает дефолтный applied style чтобы наши explicit fills не перебивались темой.
+  - Standalone CLI: `python3 table_renderer.py <config.json> <template.pptx> <out.pptx>`.
+
+- [scripts/build_v9.py](pptx-skill/scripts/build_v9.py):
+  - Import `render_table_native` (try/except → `TABLE_RENDERER_AVAILABLE`).
+  - `table_native` в списке native types (blank donor).
+  - Новая ветка обработки между `flow_diagram_native` и end of native handlers.
+
+- [scripts/validate_plan.py](pptx-skill/scripts/validate_plan.py):
+  - `table_native` принят как native (требует поля `table`).
+  - Проверки: header/headers/data наличие, n_cols ≥ 3 (canonical триггер), n_rows ≥ 3, длина каждой строки == n_cols, bounds (x..x+w в 0..1280; y+h в 0..720).
+  - **Center alignment warning** в flow_diagram_native: если block имеет явный `align: "center"` или `vanchor: "middle"` — WARN (canonical нерушим, требует обоснования через header-плашки).
+
+- [agents/02-slide-classifier.md](pptx-skill/agents/02-slide-classifier.md):
+  - Раздел про `table_native` triggers: ≥3 cols × ≥3 rows + явная шапка + intent comparison/pricing/spec.
+  - **Anti-distortion stop+ask раздел** — обязательная остановка при merged cells / irregular grid / RACI / color-coded ячейках / nested tables.
+  - **Распознавание таблиц в картинках** (по аналогии со схемами v1.7): эвристика «таблица или нет» через LLM vision → реконструкция в `table_native` headers + data. Если merged cells в картинке → stop+ask.
+  - Routing decision tree обновлён: первым шагом проверка anti-distortion триггера.
+
+**Anti-distortion safety rule:**
+- [memory feedback_anti_distortion_safety.md](memory) — новое правило: при встрече нестандартного объекта (merged cells, RACI, roadmap, color-coded, brand-объекты клиента, hand-drawn) → СТОП → описать → объяснить риск → 2-4 варианта → ждать explicit-решения пользователя. Запрет: решать самостоятельно.
+- MEMORY.md: добавлена ссылка.
+- Triggers подробно (с примерами): табличные структуры, cell-level семантика, спец-шаблоны (RACI/roadmap/quadrant/funnel/org chart), графики, брендирование, семантика положения.
+
+**Документация:**
+- [SKILL.md](pptx-skill/SKILL.md):
+  - Таблица скриптов: новый `table_renderer.py` ⭐.
+  - JSON-схема `table_native`.
+  - Раздел «Canonical правило v1.8 — table_native (zebra) + anti-distortion».
+  - В list slide_types: добавлен table_native + anti-distortion-stop.
+
+**Что НЕ поддерживается v1.8 (по решению пользователя):**
+- slide 53 (зелёный gradient) — пропущен.
+- slide 54 (expanded row) — экзотика, пропущена.
+- slide 55 (KPI table) — покрывает `kpi_native`, не делаем дубликат.
+- slide 57 (RACI matrix) — anti-distortion stop+ask (предлагаем альтернативу), не отдельный style.
+- slide 58 (Roadmap timeline) — отдельный slide_type позже (не таблица по природе).
+
+**Уроки в memory:**
+- `feedback_anti_distortion_safety.md` — новое общее правило безопасности.
+
+### Анализ «почему скилл сам решал split»
+До v1.8 классификатор «знал» правило «≤8 блоков → split» и применял молча.
+Это привело к разрыву смысла маркетинговой воронки на 3 слайда там, где
+пользователь явно хотела всё на одном. Уроки v1.8:
+1. «Перегруженность» не всегда повод для split — иногда это естественная плотность контента (например, табличный коллаж).
+2. Любое крупное structural решение (split, переоформление, замена slide_type) при ambiguity → anti-distortion stop+ask, не silent decision.
+
+

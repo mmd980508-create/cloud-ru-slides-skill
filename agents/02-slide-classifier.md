@@ -97,6 +97,121 @@ Output:
 custom annotations (vertical lines с подписями), особая стилистика осей.
 **По умолчанию НЕ использовать** — это PNG-картинка, не редактируется в PPT.
 
+### `slide_type: "table_native"` ⭐ (v1.8+)
+Триггеры (ВСЕ должны выполняться):
+- В исходнике или брифе есть **табличные данные**: ≥3 колонок × ≥3 строк данных + явная шапка (header row)
+- НЕТ merged cells / irregular grid — структура регулярная
+- intent включает таблицу/сравнение: `table` / `comparison` / `pricing` / `spec` / `matrix`
+- key_phrase содержит «таблица», «сравнение», «vs», «характеристики», «прайс», «параметры»
+
+**Назначение:** настоящая редактируемая PowerPoint table (slide.shapes.add_table()).
+Пользователь в PowerPoint:
+- двигает границы колонок мышкой
+- добавляет/удаляет строки кнопкой `+`
+- меняет данные ячеек напрямую
+- применяет/меняет table style одной командой
+
+**Стиль:** zebra (single canonical option в v1.8) — slide 56 шаблона Cloud.ru:
+- Header row: без заливки (белый), bold 12pt #222222
+- Body rows: чередуются `#F2F2F2` (серый) / белый
+- Vertical separators 0.5pt `#C8C8C8` между колонками (НЕ горизонтальные)
+- Текст SB Sans Display, 11pt body / 12pt header
+- Поля ячеек: L/R 12px, T/B 8px
+- **Выравнивание: left + top** (canonical, нерушимо)
+- Первая колонка 1.4× шире остальных (если `first_col_wider: true`, default)
+
+Output:
+```json
+{"slide_type": "table_native", "dark": false, "table": {
+  "header": "Сравнение тарифов",
+  "subtitle": "опц. подзаголовок 11pt",
+  "style": "zebra",
+  "headers": ["Тариф", "Старт", "Бизнес", "Энтерпрайз"],
+  "data": [
+    ["Цена/мес", "10 000 ₽", "50 000 ₽", "По запросу"],
+    ["Лимит API", "10K req/день", "100K", "Безлимит"],
+    ["SLA", "99.5%", "99.9%", "99.99%"]
+  ],
+  "first_col_wider": true
+}}
+```
+
+**Управление границами (`borders` config, опц.):**
+
+По умолчанию — только **внутренние вертикали** между колонками (canonical
+правило 2026-05-26). Если нужны другие границы — добавь поле `borders`:
+
+```json
+"borders": {
+  "vertical": true,        // внутренние вертикали между колонками (default true)
+  "horizontal": false,     // внутренние горизонтали между строками (default false)
+  "outer_top": false,      // внешняя верхняя (default false)
+  "outer_bottom": false,   // внешняя нижняя (default false)
+  "outer_left": false,     // внешняя левая (default false)
+  "outer_right": false,    // внешняя правая (default false)
+  "color": "#434343",      // default #434343
+  "width_pt": 1.0          // default 1.0
+}
+```
+
+Аналог опций PowerPoint UI «Границы». Линии рисуются как отдельные shape lines
+поверх таблицы (гарантия visibility во всех приложениях: PowerPoint Mac/Win,
+Keynote, LibreOffice). Менять через `borders.color` и `borders.width_pt` —
+например `width_pt: 0.5` для тонких линий (но учти: в LibreOffice render может
+быть не виден, в PowerPoint/Keynote — норм).
+
+**Когда сменить дефолт:**
+- Если в исходнике явно есть border-grid (рамки вокруг ячеек) → `outer_*` + `horizontal: true`
+- Если нужна только сетка снизу row labels → `horizontal: true`
+- Если нужна полная сетка как Excel → все 7 флагов `true`
+
+### ⛔ Когда НЕ выбирать `table_native` — anti-distortion stop (v1.8)
+
+См. [feedback_anti_distortion_safety.md] в memory — общее правило: при
+обнаружении объекта, который может **потерять смысл** при упрощении в
+canonical → **СТОП, спросить пользователя**.
+
+Конкретно для таблиц — если в исходнике одно из:
+- **Merged cells** (объединённые ячейки) — ячейка занимает 2+ колонки или строки
+- **Irregular grid** — разное количество ячеек в строках
+- **Multi-header rows** — несколько строк шапки (overheader + sub-header)
+- **Cell-level color coding** — критичность через цвет (красный = блокер, и т.п.)
+- **Nested tables** — таблица в ячейке
+- **Visual accents** на отдельных ячейках (стрелки между ячейками, иконки)
+- **RACI / responsibility matrix** (специальная семантика R/A/C/I)
+- **Roadmap timeline** в табличном виде
+
+→ **СТОП. ОПИСАТЬ что нашёл. ОБЪЯСНИТЬ риск. СПРОСИТЬ:**
+> «Я вижу [конкретный объект]. Если перевести в canonical table_native zebra,
+> можно потерять [смысл]. Варианты:
+> 1. flow_diagram_native — гибкая компоновка плашек (теряем редактирование таблицы)
+> 2. table_native упрощённо — сольём merged cells (теряем визуальную группировку)
+> 3. Оставить как есть с предупреждением о бренд-нарушении
+> 4. Сделать вручную через специальный шаблон
+> Что выбираешь?»
+
+**Запрет:** никогда не «решать самостоятельно» при обнаружении anti-distortion
+триггера. Всегда спросить.
+
+### ⭐ Распознавание таблиц в картинках (v1.8)
+
+По аналогии со схемами-в-картинках (v1.7): если в source `.pptx` есть embedded
+PNG/JPG, который ЯВЛЯЕТСЯ таблицей (≥3 cols × ≥3 rows регулярной сетки) →
+**реконструировать** через LLM vision в `table_native` (НЕ оставлять image_native).
+
+Алгоритм:
+1. LLM смотрит на PNG → проверяет «таблица или не таблица».
+2. Эвристика «таблица» (≥2 из):
+   - Видны прямоугольные ячейки в регулярной сетке
+   - Видна строка шапки (выделена жирным/фоном)
+   - Видны разделители колонок
+   - Текст в ячейках выровнен в столбцах
+3. Если таблица:
+   - Извлечь headers (текст шапки)
+   - Извлечь data rows (текст ячеек по строкам)
+   - Output → `table_native` с zebra стилем
+4. **Если есть merged cells в картинке** → anti-distortion stop+ask.
+
 ### `slide_type: "image_native"`
 Триггеры:
 - В draft есть **embedded image** (картинка как файл)
@@ -263,8 +378,13 @@ v1.6: «все диаграммы должны быть редактируемы
 ## Routing decision tree
 
 ```
+Есть anti-distortion триггер (merged cells, RACI, roadmap, color-coded
+  ячейки, иконки-акценты, custom annotations)?
+    → STOP + ASK пользователя (см. feedback_anti_distortion_safety.md)
+
 Есть chart-like data (series, axis)? → chart_pptx_native (DEFAULT, editable)
   fallback chart_native только если нужен PNG со спец-эффектами
+Есть регулярная таблица ≥3×3 с явной шапкой, БЕЗ merged cells? → table_native (v1.8+)
 Есть схема/процесс/архитектура с блоками+стрелками? → flow_diagram_native (v1.6+)
 Есть 1-3 KPI числа без текста-параграфа? → kpi_native
 Есть embedded image как main content? → image_native

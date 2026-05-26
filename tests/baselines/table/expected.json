@@ -1,0 +1,13 @@
+{
+  "_doc": "Regression baseline для table_native (v1.8). 1 слайд, 5 колонок × 5 строк (1 header + 4 data). Zebra style. brand_guardian PASS (всё в палитре #F2F2F2 / #222222 / белый), visual_validator_v2 без issues.",
+  "n_slides": 1,
+  "brand_guardian": {
+    "verdict": "PASS",
+    "score_avg_min": 90.0,
+    "violations_max": 2
+  },
+  "visual_validator_v2_with_plan": {
+    "verdict": "PASS",
+    "total_issues_max": 1
+  }
+}

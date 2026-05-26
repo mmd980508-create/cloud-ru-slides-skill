@@ -1,0 +1,31 @@
+{
+  "meta": {
+    "source": "regression-baseline для table_native (v1.8+)",
+    "rationale": "Минимальная регулярная таблица — 5 cols × 4 data rows + header. Сравнение тарифов. first_col_wider включён."
+  },
+  "slides": [
+    {
+      "slide_type": "table_native",
+      "dark": false,
+      "table": {
+        "header": "Сравнение тарифов Cloud.ru",
+        "subtitle": "regression baseline — table_native v1.8",
+        "style": "zebra",
+        "headers": [
+          "Параметр",
+          "Старт",
+          "Бизнес",
+          "Энтерпрайз",
+          "Кастом"
+        ],
+        "data": [
+          ["Цена в месяц", "10 000 ₽", "50 000 ₽", "200 000 ₽", "По запросу"],
+          ["Лимит API", "10K req/день", "100K req/день", "1M req/день", "Безлимит"],
+          ["SLA доступности", "99.5 %", "99.9 %", "99.99 %", "99.99 %+"],
+          ["Поддержка", "Email 5×8", "Email + Chat", "24/7 dedicated", "24/7 + менеджер"]
+        ],
+        "first_col_wider": true
+      }
+    }
+  ]
+}

@@ -56,6 +56,12 @@ try:
 except ImportError:
     FLOW_RENDERER_AVAILABLE = False
 
+try:
+    from table_renderer import render_table_native
+    TABLE_RENDERER_AVAILABLE = True
+except ImportError:
+    TABLE_RENDERER_AVAILABLE = False
+
 EMU_PER_PX = 9525
 
 
@@ -129,7 +135,7 @@ def build(plan_path, template_path, output_path, donor_map_path):
     cloned_for_plan = []
     for ps in plan["slides"]:
         slide_type = ps.get("slide_type")
-        if slide_type in ("kpi_native", "image_native", "chart_native", "chart_pptx_native", "flow_diagram_native"):
+        if slide_type in ("kpi_native", "image_native", "chart_native", "chart_pptx_native", "flow_diagram_native", "table_native"):
             dark = ps.get("dark", False)
             blank_idx = (BLANK_DONOR_DARK if dark else BLANK_DONOR_WHITE)
             if 1 <= blank_idx <= len(original_slides):
@@ -195,6 +201,16 @@ def build(plan_path, template_path, output_path, donor_map_path):
             dark = plan_slide.get("dark", False)
             clean_slide_to_blank(actual)
             render_flow_diagram_slide(actual, flow_config, dark=dark)
+            continue
+        if slide_type == "table_native":
+            if not TABLE_RENDERER_AVAILABLE:
+                print("WARN: table_renderer модуль недоступен — table_native пропущен",
+                      file=sys.stderr)
+                continue
+            table_config = plan_slide.get("table", {})
+            dark = plan_slide.get("dark", False)
+            clean_slide_to_blank(actual)
+            render_table_native(actual, table_config, dark=dark)
             continue
         if slide_type == "chart_native":
             if not CHART_AVAILABLE:

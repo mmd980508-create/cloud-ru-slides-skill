@@ -1,0 +1,562 @@
+#!/usr/bin/env python3
+"""
+table_renderer.py — native PowerPoint table (zebra-style) для slide_type table_native.
+
+Зачем: до v1.8 скилл не умел рисовать настоящие PowerPoint таблицы. Регулярные
+таблицы делались либо через donor 53/54 (с PNG-заглушкой), либо как набор плашек
+flow_diagram_native (что лишало пользователя редактирования таблиц в PowerPoint).
+
+Решение: native PPT table через `slide.shapes.add_table(rows, cols, ...)`, со
+стилем slide 56 шаблона Cloud.ru:
+  - Header row: белый фон, текст SemiBold 12pt #222222
+  - Body rows: чередуются #F2F2F2 (серый) / белый (zebra)
+  - Vertical separators между колонками: 0.5pt #C8C8C8 (только справа от ячеек,
+    кроме последней колонки в каждом ряду)
+  - НЕТ горизонтальных границ между строками — зебра-фон сам создаёт разделение
+  - Padding в ячейках: L/R 12px, T/B 8px (canonical: 12/8)
+  - Шрифт: SB Sans Display, 12pt для header (bold), 11pt для body (regular)
+  - Цвет текста: #222222 (графит)
+  - Выравнивание текста: **align=left, vanchor=top** (canonical правило)
+  - Первая колонка может быть шире (для row labels / категорий) через
+    `first_col_wider: true` (default).
+
+Используется build_v9 при slide_type == "table_native".
+
+Ограничения v1.8:
+  - Регулярные таблицы (M cols × N rows, без merged cells).
+  - Если в исходнике обнаружены merged cells / irregular layout — Slide Classifier
+    должен СПРОСИТЬ пользователя (anti-distortion правило, см.
+    feedback_anti_distortion_safety.md) и предложить альтернативу
+    (flow_diagram_native).
+
+Config schema (передаётся через plan.json):
+  {
+    "slide_type": "table_native",
+    "dark": false,
+    "table": {
+      "header": "Заголовок слайда",         # обязательное
+      "subtitle": "...",                     # опц., 11pt под header'ом
+      "style": "zebra",                      # default (и единственный для v1.8)
+      "headers": ["Категория", "Параметр 1", "Параметр 2"],  # row 0, обязательно
+      "data": [                              # rows ≥ 1
+        ["Row 1 label", "val", "val"],
+        ["Row 2 label", "val", "val"]
+      ],
+      "first_col_wider": true,               # опц., default true — первая шире (1.4x)
+      "x": 30, "y": 180,                     # опц., default safe-area
+      "w": 1220, "h": null,                  # опц., w=safe-width, h=auto от rows
+      "header_height": 50,                   # опц., default 50
+      "row_height": null,                    # опц., default auto fill (h / rows)
+      "borders": {                           # опц., гибкое управление границами
+        "vertical": true,                     # внутренние вертикали между колонками
+        "horizontal": false,                  # внутренние горизонтали между строками
+        "outer_top": false,                   # внешняя верхняя
+        "outer_bottom": false,                # внешняя нижняя
+        "outer_left": false,                  # внешняя левая
+        "outer_right": false,                 # внешняя правая
+        "color": "#434343",                   # цвет (default #434343)
+        "width_pt": 1.0                       # толщина в pt (default 1.0)
+      }
+    }
+  }
+
+Default `borders` (по правилу 2026-05-26 — slide 56 zebra style):
+  - Только vertical=true (внутренние вертикали)
+  - Всё остальное false
+"""
+import os
+import json
+
+from pptx.util import Pt, Emu
+from pptx.dml.color import RGBColor
+from pptx.enum.text import PP_ALIGN, MSO_ANCHOR
+from pptx.oxml.ns import qn
+from lxml import etree
+
+
+EMU = 9525
+SLIDE_W_PX = 1280
+SLIDE_H_PX = 720
+
+# Safe-area (canonical v1.7+, та же что в flow_renderer)
+SAFE_TOP = 140
+SAFE_BOTTOM = 660
+SAFE_LEFT = 30
+SAFE_RIGHT = 1250
+SAFE_W = SAFE_RIGHT - SAFE_LEFT     # 1220
+SAFE_H = SAFE_BOTTOM - SAFE_TOP     # 520
+
+
+# ============================================================================
+# Палитра (из brand/palette.json)
+# ============================================================================
+def _load_palette():
+    here = os.path.dirname(os.path.abspath(__file__))
+    for path in (
+        os.path.join(here, "..", "brand", "palette.json"),
+        os.path.join(os.getcwd(), "brand", "palette.json"),
+        os.path.join(os.getcwd(), "pptx-skill", "brand", "palette.json"),
+    ):
+        try:
+            if os.path.isfile(path):
+                with open(path, encoding="utf-8") as f:
+                    return json.load(f)
+        except Exception:
+            continue
+    return None
+
+
+_PAL = _load_palette()
+
+
+def _hex(hx):
+    h = hx.lstrip("#")
+    return RGBColor(int(h[0:2], 16), int(h[2:4], 16), int(h[4:6], 16))
+
+
+def _from_palette(section, name, fallback):
+    if _PAL and name in _PAL.get(section, {}):
+        return _hex(_PAL[section][name])
+    return _hex(fallback)
+
+
+GRAPHITE = _from_palette("base", "Black", "#222222")
+WHITE = _from_palette("base", "White", "#FFFFFF")
+GRAY = _from_palette("base", "Gray", "#F2F2F2")
+
+# Canonical (правило 2026-05-26): vertical separators между колонками таблицы =
+# 1pt #434343. Никаких внешних границ и горизонтальных линий — зебра-фон сам
+# создаёт визуальное разделение.
+# NB: 0.5pt в PowerPoint/Keynote часто плохо видны (anti-aliasing), поэтому 1pt.
+SEPARATOR_COLOR = RGBColor(0x43, 0x43, 0x43)
+SEPARATOR_WIDTH_PT = 1.0
+
+FONT = "SB Sans Display"
+
+
+# ============================================================================
+# Утилиты для XML cell properties
+# ============================================================================
+def _set_cell_fill(cell, rgb):
+    """Установить fill ячейки. None → noFill (прозрачная)."""
+    if rgb is None:
+        cell.fill.background()
+    else:
+        cell.fill.solid()
+        cell.fill.fore_color.rgb = rgb
+
+
+def _set_cell_borders(cell, left=False, right=False,
+                       top=False, bottom=False,
+                       color_rgb=None, w_pt=None):
+    """Установить границы ячейки. Все четыре стороны явно — для надёжности.
+
+    Canonical (2026-05-26): vertical separator между колонками = 1pt #434343,
+    рисуется НА ОБЕИХ соседних ячейках (lnR cell[c] + lnL cell[c+1]) — это
+    защита от z-order issue, когда заливка соседней ячейки перекрывает мой
+    границу. Никаких внешних рамок и горизонтальных линий.
+    """
+    rgb = color_rgb if color_rgb is not None else SEPARATOR_COLOR
+    width = w_pt if w_pt is not None else SEPARATOR_WIDTH_PT
+    tc = cell._tc
+    tcPr = tc.find(qn("a:tcPr"))
+    if tcPr is None:
+        tcPr = etree.SubElement(tc, qn("a:tcPr"))
+
+    # Удалить существующие lnL/lnR/lnT/lnB
+    for tag in ("lnL", "lnR", "lnT", "lnB"):
+        for el in tcPr.findall(qn(f"a:{tag}")):
+            tcPr.remove(el)
+
+    def _add_border(tag, on):
+        ln = etree.SubElement(tcPr, qn(f"a:{tag}"))
+        ln.set("w", str(int(width * 12700)))
+        # cap=flat и algn=ctr — как в оригинальном slide 56 шаблона.
+        ln.set("cap", "flat")
+        ln.set("cmpd", "sng")
+        ln.set("algn", "ctr")
+        if on:
+            solidFill = etree.SubElement(ln, qn("a:solidFill"))
+            srgb = etree.SubElement(solidFill, qn("a:srgbClr"))
+            srgb.set("val", f"{rgb[0]:02X}{rgb[1]:02X}{rgb[2]:02X}")
+            prstDash = etree.SubElement(ln, qn("a:prstDash"))
+            prstDash.set("val", "solid")
+            etree.SubElement(ln, qn("a:round"))
+        else:
+            etree.SubElement(ln, qn("a:noFill"))
+
+    # PowerPoint порядок: lnL, lnR, lnT, lnB.
+    _add_border("lnL", left)
+    _add_border("lnR", right)
+    _add_border("lnT", top)
+    _add_border("lnB", bottom)
+
+
+def _set_cell_margins(cell, left_px=12, right_px=12, top_px=8, bottom_px=8):
+    """Поля внутри ячейки (canonical v1.8: L/R 12px, T/B 8px)."""
+    tc = cell._tc
+    tcPr = tc.find(qn("a:tcPr"))
+    if tcPr is None:
+        tcPr = etree.SubElement(tc, qn("a:tcPr"))
+    tcPr.set("marL", str(left_px * EMU))
+    tcPr.set("marR", str(right_px * EMU))
+    tcPr.set("marT", str(top_px * EMU))
+    tcPr.set("marB", str(bottom_px * EMU))
+
+
+def _set_cell_text(cell, text, size_pt=11, bold=False, color_rgb=None):
+    """Записать текст в ячейку с canonical стилями (left + top, font SB Sans)."""
+    tf = cell.text_frame
+    # Убрать дефолтный пустой параграф
+    tf.clear()
+    p = tf.paragraphs[0]
+    p.alignment = PP_ALIGN.LEFT
+    # Vertical anchor top — через body properties
+    cell.vertical_anchor = MSO_ANCHOR.TOP
+    # word wrap on (default), но убедимся
+    cell.text_frame.word_wrap = True
+
+    run = p.add_run()
+    run.text = str(text) if text is not None else ""
+    run.font.name = FONT
+    run.font.size = Pt(size_pt)
+    run.font.bold = bold
+    run.font.color.rgb = color_rgb if color_rgb is not None else GRAPHITE
+
+
+def _strip_default_table_style(table):
+    """Заменить дефолтный applied table style (Medium Style 1 / etc.) на
+    built-in «No Style, No Grid» (PowerPoint GUID {2D5ABB26-...}).
+
+    Если просто УДАЛИТЬ tableStyleId — PowerPoint остаётся без applied style и
+    может игнорировать cell-level borders. «No Style, No Grid» — это пустой
+    встроенный стиль: без своих fills/borders, но позволяет cell-level overrides.
+
+    Также удаляем атрибуты firstRow/bandRow и т.п. — мы делаем zebra вручную.
+    """
+    tbl = table._tbl
+    tblPr = tbl.find(qn("a:tblPr"))
+    if tblPr is not None:
+        # Убираем firstRow / bandRow / etc. — мы делаем стили вручную
+        for attr in ("firstRow", "bandRow", "lastRow", "firstCol", "lastCol", "bandCol"):
+            if tblPr.get(attr):
+                del tblPr.attrib[attr]
+        # Заменить tableStyleId на «No Style, No Grid»
+        for sid in tblPr.findall(qn("a:tableStyleId")):
+            tblPr.remove(sid)
+        no_style_id = etree.SubElement(tblPr, qn("a:tableStyleId"))
+        no_style_id.text = "{2D5ABB26-0587-4C30-8999-92F81FD0307C}"
+
+
+# ============================================================================
+# Header слайда + subtitle (общая часть для table_native)
+# ============================================================================
+def _add_slide_header(slide, text, dark=False):
+    """Заголовок слайда — 20pt SemiBold CAPS, top-left (35, 60). Canonical."""
+    box = slide.shapes.add_textbox(
+        Emu(35 * EMU), Emu(60 * EMU), Emu(1209 * EMU), Emu(40 * EMU)
+    )
+    tf = box.text_frame
+    tf.vertical_anchor = MSO_ANCHOR.MIDDLE
+    tf.margin_left = Emu(0)
+    p = tf.paragraphs[0]
+    p.alignment = PP_ALIGN.LEFT
+    run = p.add_run()
+    run.text = text.upper()
+    run.font.name = FONT
+    run.font.size = Pt(20)
+    run.font.bold = True
+    run.font.color.rgb = WHITE if dark else GRAPHITE
+
+
+def _add_top_separator(slide, y=110):
+    """Тонкая серая линия под заголовком."""
+    from pptx.enum.shapes import MSO_CONNECTOR
+    conn = slide.shapes.add_connector(
+        MSO_CONNECTOR.STRAIGHT,
+        Emu(35 * EMU), Emu(y * EMU), Emu(1245 * EMU), Emu(y * EMU)
+    )
+    conn.line.color.rgb = RGBColor(0xCC, 0xCC, 0xCC)
+    conn.line.width = Emu(int(0.5 * 12700))
+
+
+def _add_subtitle(slide, text, dark=False):
+    """Subtitle 11pt под header'ом."""
+    box = slide.shapes.add_textbox(
+        Emu(35 * EMU), Emu(122 * EMU), Emu(1200 * EMU), Emu(22 * EMU)
+    )
+    tf = box.text_frame
+    tf.vertical_anchor = MSO_ANCHOR.MIDDLE
+    tf.margin_left = Emu(0)
+    p = tf.paragraphs[0]
+    p.alignment = PP_ALIGN.LEFT
+    run = p.add_run()
+    run.text = text
+    run.font.name = FONT
+    run.font.size = Pt(11)
+    run.font.bold = False
+    run.font.color.rgb = WHITE if dark else GRAPHITE
+
+
+# ============================================================================
+# Главная функция
+# ============================================================================
+def render_table_native(slide, table_config, dark=False):
+    """Собирает native PowerPoint таблицу в стиле slide 56 (zebra).
+
+    Предполагается, что slide уже прошёл clean_slide_to_blank().
+    """
+    if not isinstance(table_config, dict):
+        raise ValueError("table_config должен быть dict")
+
+    headers = table_config.get("headers", [])
+    data = table_config.get("data", [])
+
+    if not headers:
+        raise ValueError("table_config.headers — пусто (нужна шапка)")
+    if not data:
+        raise ValueError("table_config.data — пусто (нужно ≥1 строка)")
+
+    n_cols = len(headers)
+    n_data_rows = len(data)
+    n_rows_total = 1 + n_data_rows  # header + data
+
+    # Проверка: все data rows той же длины что и headers
+    for i, row in enumerate(data):
+        if len(row) != n_cols:
+            raise ValueError(
+                f"table_config.data[{i}]: {len(row)} ячеек, ожидалось {n_cols}"
+            )
+
+    # 1. Header слайда
+    header_text = table_config.get("header", "")
+    if header_text:
+        _add_slide_header(slide, header_text, dark=dark)
+        _add_top_separator(slide)
+
+    subtitle = table_config.get("subtitle")
+    if subtitle:
+        _add_subtitle(slide, subtitle, dark=dark)
+
+    # 2. Расчёт размеров таблицы
+    table_x = table_config.get("x", SAFE_LEFT)
+    table_y = table_config.get("y", 170 if subtitle else 160)
+    table_w = table_config.get("w", SAFE_W)
+    table_h = table_config.get("h")  # может быть None — посчитаем
+
+    header_h = table_config.get("header_height", 50)
+    row_h = table_config.get("row_height")
+
+    if table_h is None and row_h is None:
+        # Заполнить доступную safe-area
+        avail_h = SAFE_BOTTOM - table_y - 20  # 20 px зазор перед footer
+        row_h = max(40, (avail_h - header_h) // n_data_rows)
+        table_h = header_h + row_h * n_data_rows
+    elif table_h is None:
+        # row_h задан
+        table_h = header_h + row_h * n_data_rows
+    elif row_h is None:
+        row_h = max(30, (table_h - header_h) // n_data_rows)
+
+    # 3. Распределение ширин колонок
+    first_col_wider = table_config.get("first_col_wider", True)
+    if first_col_wider and n_cols >= 2:
+        # Первая колонка 1.4× от остальных
+        # x = first_w + (n-1) * rest_w; first_w = 1.4 * rest_w
+        # → rest_w = total / (1.4 + n - 1)
+        rest_w = table_w / (1.4 + n_cols - 1)
+        first_w = int(round(1.4 * rest_w))
+        rest_w = int(round(rest_w))
+        col_widths = [first_w] + [rest_w] * (n_cols - 1)
+        # Скорректировать чтобы сумма = table_w
+        col_widths[-1] = table_w - sum(col_widths[:-1])
+    else:
+        # Равномерно
+        col_widths = [table_w // n_cols] * n_cols
+        col_widths[-1] = table_w - sum(col_widths[:-1])
+
+    # 4. Создание таблицы
+    table_shape = slide.shapes.add_table(
+        n_rows_total, n_cols,
+        Emu(table_x * EMU), Emu(table_y * EMU),
+        Emu(table_w * EMU), Emu(table_h * EMU),
+    )
+    table = table_shape.table
+    _strip_default_table_style(table)
+
+    # 5. Установить ширины колонок
+    for i, w in enumerate(col_widths):
+        table.columns[i].width = Emu(w * EMU)
+
+    # 6. Установить высоты строк
+    table.rows[0].height = Emu(header_h * EMU)
+    for r in range(1, n_rows_total):
+        table.rows[r].height = Emu(row_h * EMU)
+
+    # Все cell-level borders ВЫКЛЮЧЕНЫ — границы будем рисовать отдельными
+    # connector lines поверх таблицы (см. шаг 9). Это обеспечивает гарантированную
+    # visibility во всех приложениях (PowerPoint Mac/Win, Keynote, LibreOffice),
+    # независимо от applied table style.
+    no_borders = {"left": False, "right": False, "top": False, "bottom": False}
+
+    # 7. Заполнить header row (row 0)
+    for c_idx, header_text in enumerate(headers):
+        cell = table.cell(0, c_idx)
+        _set_cell_fill(cell, None)  # noFill — белая/прозрачная
+        _set_cell_margins(cell, left_px=12, right_px=12, top_px=8, bottom_px=8)
+        _set_cell_borders(cell, **no_borders)
+        _set_cell_text(cell, header_text, size_pt=12, bold=True)
+
+    # 8. Заполнить data rows (row 1..N) — zebra
+    for r_idx, row_data in enumerate(data):
+        row_num = r_idx + 1  # в таблице (с учётом header)
+        # zebra: первая data row серая, вторая белая, и т.д.
+        is_even_data_row = (r_idx % 2 == 0)
+        fill_rgb = GRAY if is_even_data_row else None  # None = noFill = белая
+
+        for c_idx, cell_text in enumerate(row_data):
+            cell = table.cell(row_num, c_idx)
+            _set_cell_fill(cell, fill_rgb)
+            _set_cell_margins(cell, left_px=12, right_px=12, top_px=8, bottom_px=8)
+            _set_cell_borders(cell, **no_borders)
+            _set_cell_text(cell, cell_text, size_pt=11, bold=False)
+
+    # 9. Нарисовать границы как отдельные connector lines поверх таблицы.
+    # Это гарантирует visibility во всех приложениях.
+    _draw_table_borders_as_lines(
+        slide, table_config,
+        table_x, table_y, table_w, table_h,
+        col_widths, header_h, row_h, n_data_rows
+    )
+
+    return table_shape
+
+
+def _draw_table_borders_as_lines(slide, table_config,
+                                  table_x, table_y, table_w, table_h,
+                                  col_widths, header_h, row_h, n_data_rows):
+    """Нарисовать границы как отдельные line shapes поверх таблицы.
+
+    Управление через `table_config['borders']` dict:
+      - vertical: bool — внутренние вертикали между колонками
+      - horizontal: bool — внутренние горизонтали между строками
+      - outer_top / outer_bottom / outer_left / outer_right: bool — внешние
+      - color: hex (#434343)
+      - width_pt: float (1.0)
+
+    Default: только vertical=true (canonical правило 2026-05-26).
+    """
+    from pptx.enum.shapes import MSO_CONNECTOR
+
+    borders = table_config.get("borders", {})
+
+    # Defaults
+    vertical = borders.get("vertical", True)
+    horizontal = borders.get("horizontal", False)
+    outer_top = borders.get("outer_top", False)
+    outer_bottom = borders.get("outer_bottom", False)
+    outer_left = borders.get("outer_left", False)
+    outer_right = borders.get("outer_right", False)
+    color_hex = borders.get("color", "#434343")
+    width_pt = borders.get("width_pt", 1.0)
+
+    color_rgb = _hex(color_hex) if isinstance(color_hex, str) else color_hex
+    line_w_emu = int(width_pt * 12700)
+
+    def _line(x1, y1, x2, y2):
+        conn = slide.shapes.add_connector(
+            MSO_CONNECTOR.STRAIGHT,
+            Emu(int(x1) * EMU), Emu(int(y1) * EMU),
+            Emu(int(x2) * EMU), Emu(int(y2) * EMU)
+        )
+        conn.line.color.rgb = color_rgb
+        conn.line.width = Emu(line_w_emu)
+        return conn
+
+    # X-координаты границ колонок (включая левую и правую внешние)
+    col_x = [table_x]
+    for w in col_widths:
+        col_x.append(col_x[-1] + w)
+    # col_x = [left, after_col1, after_col2, ..., right]
+
+    # Y-координаты границ строк (header + data rows)
+    row_y = [table_y, table_y + header_h]
+    for _ in range(n_data_rows):
+        row_y.append(row_y[-1] + row_h)
+    # row_y = [top, after_header, after_data_row1, ..., bottom]
+
+    table_bottom = row_y[-1]
+    table_right = col_x[-1]
+
+    # Внутренние вертикали (между колонками)
+    if vertical:
+        for i in range(1, len(col_x) - 1):
+            x = col_x[i]
+            _line(x, table_y, x, table_bottom)
+
+    # Внутренние горизонтали (между строками)
+    if horizontal:
+        for i in range(1, len(row_y) - 1):
+            y = row_y[i]
+            _line(table_x, y, table_right, y)
+
+    # Внешние границы
+    if outer_top:
+        _line(table_x, table_y, table_right, table_y)
+    if outer_bottom:
+        _line(table_x, table_bottom, table_right, table_bottom)
+    if outer_left:
+        _line(table_x, table_y, table_x, table_bottom)
+    if outer_right:
+        _line(table_right, table_y, table_right, table_bottom)
+
+
+# ============================================================================
+# CLI для standalone-теста
+# ============================================================================
+def _cli_main():
+    """python3 table_renderer.py <config.json> <template.pptx> <out.pptx>"""
+    import sys
+    from pptx import Presentation
+    from pptx.oxml.ns import qn
+
+    if len(sys.argv) < 4:
+        print("Usage: table_renderer.py <config.json> <template.pptx> <out.pptx>",
+              file=sys.stderr)
+        sys.exit(1)
+
+    cfg_path, tpl_path, out_path = sys.argv[1], sys.argv[2], sys.argv[3]
+    with open(cfg_path, encoding="utf-8") as f:
+        cfg = json.load(f)
+
+    here = os.path.dirname(os.path.abspath(__file__))
+    import sys as _sys
+    _sys.path.insert(0, here)
+    from kpi_renderer import clean_slide_to_blank, BLANK_DONOR_WHITE, BLANK_DONOR_DARK
+    from build_v9 import clone_slide
+
+    dark = cfg.get("dark", False)
+    table_cfg = cfg.get("table", cfg)
+
+    p = Presentation(tpl_path)
+    originals = list(p.slides)
+    blank_idx = BLANK_DONOR_DARK if dark else BLANK_DONOR_WHITE
+    new_slide = clone_slide(p, originals[blank_idx - 1])
+
+    sldIdLst = p.slides._sldIdLst
+    for sid in list(sldIdLst)[:len(originals)]:
+        rid = sid.attrib[qn("r:id")]
+        try:
+            p.part.drop_rel(rid)
+        except Exception:
+            pass
+        sldIdLst.remove(sid)
+
+    clean_slide_to_blank(new_slide)
+    render_table_native(new_slide, table_cfg, dark=dark)
+    p.save(out_path)
+    print(f"Saved {out_path}", file=sys.stderr)
+
+
+if __name__ == "__main__":
+    _cli_main()

@@ -164,6 +164,7 @@ PHASE 3 — GLOBAL VERIFICATION (один раз в конце):
 | **`chart_native_pptx.py`** ⭐ | **DEFAULT для charts (v1.4+). Редактируемая PowerPoint chart через `pptx.chart.add_chart()` — пользователь меняет данные через Edit Data → Excel. Поддержка: area_stacked/area_100/bar/bar_stacked/line/pie** |
 | `chart_engine.py` | Legacy: Matplotlib chart redraw в PNG (canonical pastel palette). Использовать ТОЛЬКО когда нужны custom annotations или прозрачные overlapping areas, которые native chart не умеет |
 | **`flow_renderer.py`** ⭐ | **v1.6+. Редактируемые схемы / блок-диаграммы / process maps через примитивы PowerPoint (blocks, arrows, dashed groups). slide_type: flow_diagram_native** |
+| **`table_renderer.py`** ⭐ | **v1.8+. Редактируемые native PowerPoint таблицы (slide.shapes.add_table) в zebra-стиле slide 56 шаблона. slide_type: table_native** |
 | `render_slides.py` | .pptx → PNG (LibreOffice) для визуальной проверки |
 | `brand_guardian.py` | Валидация цветов/шрифтов/композиции готового .pptx |
 | **`visual_validator_v2.py`** | **Pixel-level анализ rendered PNG (PIL): unfilled placeholders, off-palette > 15%, dominant bg** |
@@ -197,6 +198,34 @@ PHASE 3 — GLOBAL VERIFICATION (один раз в конце):
 {"slide_type": "chart_native", "chart": {
   "type": "area_stacked|bar|line|pie",
   "slide_title": "...", "x": [...], "series": [...], "accent_idx": N
+}}
+
+// ⭐ v1.8+ Редактируемая native PowerPoint таблица в zebra-стиле (slide 56).
+// Пользователь может в PowerPoint двигать колонки, добавлять строки кнопкой,
+// редактировать данные через таблицу. Только для регулярных таблиц
+// (≥3 cols × ≥3 rows, БЕЗ merged cells). Если есть merged cells / irregular
+// grid → anti-distortion stop+ask (см. feedback_anti_distortion_safety.md).
+{"slide_type": "table_native", "dark": false, "table": {
+  "header": "Сравнение тарифов",
+  "subtitle": "опц.",
+  "style": "zebra",
+  "headers": ["Тариф", "Старт", "Бизнес", "Энтерпрайз"],
+  "data": [
+    ["Цена/мес", "10 000 ₽", "50 000 ₽", "По запросу"],
+    ["Лимит API", "10K", "100K", "Безлимит"],
+    ["SLA", "99.5%", "99.9%", "99.99%"]
+  ],
+  "first_col_wider": true,
+  "borders": {                           // опц., гибкое управление границами
+    "vertical": true,                     // внутренние вертикали (default true)
+    "horizontal": false,                  // внутренние горизонтали (default false)
+    "outer_top": false,                   // внешняя верхняя (default false)
+    "outer_bottom": false,                // внешняя нижняя (default false)
+    "outer_left": false,                  // внешняя левая (default false)
+    "outer_right": false,                 // внешняя правая (default false)
+    "color": "#434343",                   // default #434343
+    "width_pt": 1.0                       // default 1.0
+  }
 }}
 
 // ⭐ v1.6+ Редактируемые схемы / блок-диаграммы / process maps.
@@ -242,6 +271,30 @@ GREEN никогда не дублируется на не-accent серии.
 - chart-like data (series, axis, time-data) → `chart_pptx_native` (DEFAULT)
 - main image (фото/скриншот) → `image_native`
 - схема / процесс / архитектура (блоки+стрелки) → `flow_diagram_native` ⭐ (v1.6+)
+- регулярная таблица ≥3×3 с шапкой, БЕЗ merged cells → `table_native` ⭐ (v1.8+)
+- **anti-distortion триггер** (merged cells, RACI, color-coded, brand-объекты) → **STOP+ASK** (v1.8+)
+
+### Canonical правило v1.8 — table_native (zebra) + anti-distortion
+
+**Регулярные таблицы** (≥3 cols × ≥3 rows, без merged cells) рендерятся как
+**native PowerPoint table** (zebra style slide 56). Пользователь редактирует
+данные / границы / стили прямо в PowerPoint.
+
+**Стиль zebra (slide 56):**
+- Header row: без заливки, bold 12pt #222222, без border
+- Body rows: чередуются `#F2F2F2` / белый
+- Vertical separators 0.5pt `#C8C8C8` между колонками
+- НЕТ горизонтальных границ
+- Текст: left + top alignment (нерушимо), SB Sans Display, 11pt body / 12pt header
+- Поля ячеек: L/R 12px, T/B 8px
+- Первая колонка 1.4× шире (для row labels) — опц. (`first_col_wider: true`)
+
+**Anti-distortion stop+ask (v1.8):** при обнаружении объекта, который может
+быть **искажён или утерян** при применении canonical правил — Slide Classifier
+ОБЯЗАН остановиться и спросить пользователя. Триггеры: merged cells, RACI,
+roadmap, color-coded ячейки, иконки-маркеры, custom annotations, brand-объекты
+клиента. Подробности — `agents/02-slide-classifier.md` и memory
+`feedback_anti_distortion_safety.md`. Запрет: решать самостоятельно.
 
 ### Canonical правило v1.6 — editable schemas (обновлено v1.7)
 
