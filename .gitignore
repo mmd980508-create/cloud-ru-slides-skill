@@ -1,0 +1,31 @@
+# macOS системные файлы
+.DS_Store
+**/.DS_Store
+
+# Результаты генерации (создаются автоматически, не нужны в репо)
+output/
+**/output/
+
+# Временные файлы Python
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+.Python
+*.egg-info/
+.pytest_cache/
+
+# Виртуальные окружения
+venv/
+.venv/
+env/
+
+# IDE
+.vscode/
+.idea/
+
+# Логи
+*.log
+
+# Тяжёлые архивы
+*.zip

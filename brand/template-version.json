@@ -1,0 +1,20 @@
+{
+  "_doc": "Маппинг ключевых слайдов в Cloud.ru шаблоне. При обновлении шаблона править только здесь — все native renderers подхватят. Индексы 1-based (как нумеруются слайды в PowerPoint).",
+
+  "template_file": "Cloud.ru_Template_2026.pptx",
+  "version": "2026.1",
+
+  "blank_donors": {
+    "_doc": "Слайды с минимальным контентом — используются как 'чистый холст' для native renderers (kpi/image/chart_pptx_native).",
+    "white": 30,
+    "dark": 22
+  },
+
+  "guide_donors": {
+    "_doc": "Guide-слайды (примеры размеров от дизайнеров Cloud.ru) — НЕ использовать как clone source.",
+    "kpi_white": 43,
+    "kpi_dark": 44,
+    "table_simple": 53,
+    "table_large": 54
+  }
+}

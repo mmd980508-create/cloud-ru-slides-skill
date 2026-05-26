@@ -1,0 +1,13 @@
+{
+  "_doc": "Эталонные значения для regression-теста humanity. Если pipeline после изменений даёт другие — есть регрессия.",
+  "n_slides": 4,
+  "brand_guardian": {
+    "verdict": "PASS",
+    "score_avg_min": 95.0,
+    "violations_max": 0
+  },
+  "visual_validator_v2_with_plan": {
+    "verdict": "PASS",
+    "total_issues_max": 0
+  }
+}
