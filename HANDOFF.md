@@ -1,6 +1,6 @@
 # HANDOFF — Cloud.ru Slides Skill
 
-> **Для нового агента/разработчика.** Это входное окно для продолжения разработки скилла Cloud.ru Slides Skill после v1.5.
+> **Для нового агента/разработчика.** Это входное окно для продолжения разработки скилла Cloud.ru Slides Skill после v1.7.
 >
 > Прочитать перед первым коммитом. После прочтения — переходи к [Что делать первым](#что-делать-первым).
 
@@ -9,7 +9,7 @@
 ## TL;DR за 60 секунд
 
 - **Что:** Claude.app skill для авто-вёрстки `.pptx` по бренду **Cloud.ru 2.0**
-- **Версия:** v1.5 (2026-05-05) — `cloud-ru-slides-skill-v1.5.zip`
+- **Версия:** v1.7 (2026-05-26) — `cloud-ru-slides-skill-v1.7.zip`
 - **Состояние:** **Working baseline.** 4 кейса прошли LLM-визуальную проверку 4.7-4.8/5
 - **Архитектура:** Per-slide LLM design loop + native renderers (KPI/image/chart) + 4 валидатора (validate_plan → brand_guardian → visual_validator_v2 → LLM Visual Verifier)
 - **Главный файл:** `SKILL.md` (frontmatter + workflow)

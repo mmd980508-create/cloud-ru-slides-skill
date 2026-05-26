@@ -127,8 +127,22 @@ GRAPHITE_DARK = _from_palette("base_alts", "Graphite-Iron", "#343F48")
 DASH_GRAY = RGBColor(0x88, 0x88, 0x88)
 SEPARATOR_GRAY = RGBColor(0xCC, 0xCC, 0xCC)
 
+# Canonical для flow-схем (правило 2026-05-06):
+ARROW_COLOR = RGBColor(0x43, 0x43, 0x43)   # единый цвет всех стрелок
+ARROW_WIDTH_PT = 1.0                        # единая толщина всех стрелок
+
 
 FONT = "SB Sans Display"
+
+
+# Safe-area для 1280×720 Cloud.ru slide.
+# Все координаты flow-схем должны рассчитываться относительно этих констант.
+SAFE_TOP = 140       # под заголовком 20pt + разделителем
+SAFE_BOTTOM = 660    # выше footer copyright
+SAFE_LEFT = 30
+SAFE_RIGHT = 1250
+SAFE_W = SAFE_RIGHT - SAFE_LEFT   # 1220
+SAFE_H = SAFE_BOTTOM - SAFE_TOP    # 520
 
 
 # ============================================================================
@@ -165,15 +179,21 @@ def _resolve_fill(fill_name):
 
 def add_block(slide, x, y, w, h, lines,
               font_sizes=None, bolds=None,
-              caps_first=False, fill="gray", align="center",
+              caps_first=False, fill="gray", align="left",
+              vanchor="top",
               text_color=None):
     """Прямоугольник с многострочным контентом.
+
+    Canonical (правило 2026-05-06):
+    - Текст ВСЕГДА выравнивается по ЛЕВОМУ (align='left') и ВЕРХНЕМУ (vanchor='top') краю.
+    - Поля одинаковые 12px, нижнее 16px.
 
     lines: list[str].
     font_sizes / bolds: list of same len. По умолчанию [13, 11, 11, ...] / [True, False, ...].
     caps_first: первая строка → CAPS.
     fill: "gray" (default) / "white" / "green" / "dark" / hex string.
-    align: "center" (default) / "left".
+    align: "left" (default, canonical) / "center" / "right".
+    vanchor: "top" (default, canonical) / "middle".
     text_color: явный override (RGBColor); иначе из fill.
     """
     rgb_fill, default_text = _resolve_fill(fill)
@@ -187,18 +207,22 @@ def add_block(slide, x, y, w, h, lines,
 
     tf = shape.text_frame
     tf.word_wrap = True
-    tf.vertical_anchor = MSO_ANCHOR.MIDDLE
-    tf.margin_left = Emu(6 * EMU)
-    tf.margin_right = Emu(6 * EMU)
-    tf.margin_top = Emu(4 * EMU)
-    tf.margin_bottom = Emu(4 * EMU)
+    tf.vertical_anchor = MSO_ANCHOR.TOP if vanchor == "top" else MSO_ANCHOR.MIDDLE
+    tf.margin_left = Emu(12 * EMU)
+    tf.margin_right = Emu(12 * EMU)
+    tf.margin_top = Emu(12 * EMU)
+    tf.margin_bottom = Emu(16 * EMU)
 
     if font_sizes is None:
         font_sizes = [13] + [11] * max(0, len(lines) - 1)
     if bolds is None:
         bolds = [True] + [False] * max(0, len(lines) - 1)
 
-    align_enum = PP_ALIGN.LEFT if align == "left" else PP_ALIGN.CENTER
+    align_enum = {
+        "left": PP_ALIGN.LEFT,
+        "center": PP_ALIGN.CENTER,
+        "right": PP_ALIGN.RIGHT,
+    }.get(align, PP_ALIGN.LEFT)
 
     for i, line in enumerate(lines):
         p = tf.paragraphs[0] if i == 0 else tf.add_paragraph()
@@ -245,13 +269,26 @@ def add_label(slide, x, y, w, h, text,
 
 
 def add_arrow(slide, x1, y1, x2, y2,
-              with_head=True, w_pt=1.0, dashed=False, color=None):
-    """Прямая стрелка/коннектор."""
+              with_head=True, w_pt=None, dashed=False, color=None):
+    """Прямая стрелка/коннектор.
+
+    Canonical (правило 2026-05-06):
+    - Только горизонтальные или вертикальные. Диагонали запрещены (валидация ниже).
+    - Толщина: единая ARROW_WIDTH_PT = 1.0 (w_pt override только для исключений).
+    - Цвет: единый ARROW_COLOR = #434343.
+    - Голова: открытая галочка (type='arrow') размер 8 (w=lg, len=med).
+    """
+    if x1 != x2 and y1 != y2:
+        raise ValueError(
+            f"add_arrow: диагональная стрелка ({x1},{y1})→({x2},{y2}) запрещена. "
+            "Используй ломаную через 90° (несколько add_arrow с промежуточными точками)."
+        )
     conn = slide.shapes.add_connector(
         MSO_CONNECTOR.STRAIGHT, px(x1), px(y1), px(x2), px(y2)
     )
-    conn.line.color.rgb = color if color is not None else GRAPHITE
-    conn.line.width = Emu(int(w_pt * 12700))
+    conn.line.color.rgb = color if color is not None else ARROW_COLOR
+    effective_w = w_pt if w_pt is not None else ARROW_WIDTH_PT
+    conn.line.width = Emu(int(effective_w * 12700))
     if dashed:
         ln = conn.line._get_or_add_ln()
         prstDash = etree.SubElement(ln, qn("a:prstDash"))
@@ -262,9 +299,11 @@ def add_arrow(slide, x1, y1, x2, y2,
             for el in ln.findall(qn(f"a:{tag}")):
                 ln.remove(el)
         tail_end = etree.SubElement(ln, qn("a:tailEnd"))
-        tail_end.set("type", "triangle")
-        tail_end.set("w", "sm")
-        tail_end.set("len", "sm")
+        # PowerPoint UI «открытая стрелка, размер 8» = (type=arrow, w=lg, len=med).
+        # (w=lg, len=lg) = размер 9 (максимум).
+        tail_end.set("type", "arrow")
+        tail_end.set("w", "lg")
+        tail_end.set("len", "med")
     return conn
 
 
