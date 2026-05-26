@@ -12,12 +12,19 @@ flow_renderer.py — native PowerPoint flow-diagrams / schemas / process maps.
 
 Используется build_v9 при slide_type == "flow_diagram_native".
 
-Стиль (canonical, согласован с эталонными слайдами Cloud.ru):
-  - Блоки: серые #F2F2F2, текст SB Sans Display #222222
-  - Стрелки: чёрные 1pt, маленький наконечник (triangle, w=sm len=sm)
-  - Пунктирные рамки для группировки фаз: 1pt #888888 dash
-  - Заголовок: 20pt SemiBold CAPS, top-left (35, 60)
-  - Decor (по бренду): зелёные L-уголки с диагональю — bottom corner
+Стиль (canonical, согласован с эталонными слайдами Cloud.ru;
+правило 2026-05-06 — feedback_flow_diagram_composition.md):
+  - Блоки: серые #F2F2F2, текст SB Sans Display #222222.
+  - Текст в блоках: align=LEFT, vertical_anchor=TOP. Поля: 12px со всех сторон,
+    низ 16px.
+  - Стрелки: единая толщина 1pt, цвет #434343 (тёмно-серый, не #222222 графит).
+    Наконечник: открытая галочка (type='arrow'), размер 8 в PPT UI (w=lg,
+    len=med). Только горизонтальные/вертикальные — диагонали запрещены.
+  - Пунктирные рамки для группировки фаз: 1pt #888888 dash.
+  - Заголовок: 20pt SemiBold CAPS, top-left (35, 60).
+  - Decor (по бренду): зелёные L-уголки с диагональю — bottom corner.
+  - Safe-area: SAFE_TOP=140, SAFE_BOTTOM=660, SAFE_LEFT=30, SAFE_RIGHT=1250.
+    Все координаты блоков должны лежать внутри safe-area.
 
 Координаты — в пикселях (slide 1280×720). EMU = px × 9525.
 
@@ -38,7 +45,8 @@ Config schema (передаётся через plan.json):
           "bolds": [true, false],              # опц.
           "caps_first": false,                 # опц.
           "fill": "gray|green|dark|white",     # опц., default "gray"
-          "align": "center|left"               # опц., default "center"
+          "align": "left|center|right",        # опц., default "left" (canonical)
+          "vanchor": "top|middle"              # опц., default "top" (canonical)
         }
       ],
       "groups": [                              # опц., dashed рамки + лейблы
@@ -419,6 +427,7 @@ def render_flow_diagram_slide(slide, flow_config, dark=False):
     # 2. Blocks — собираем по id для arrow refs
     blocks_by_id = {}
     for blk in flow_config.get("blocks", []):
+        # Canonical default: align=left, vanchor=top (правило 2026-05-06).
         shape = add_block(
             slide,
             blk["x"], blk["y"], blk["w"], blk["h"],
@@ -427,7 +436,8 @@ def render_flow_diagram_slide(slide, flow_config, dark=False):
             bolds=blk.get("bolds"),
             caps_first=blk.get("caps_first", False),
             fill=blk.get("fill", "gray"),
-            align=blk.get("align", "center"),
+            align=blk.get("align", "left"),
+            vanchor=blk.get("vanchor", "top"),
         )
         if "id" in blk:
             blocks_by_id[blk["id"]] = blk
@@ -459,10 +469,11 @@ def render_flow_diagram_slide(slide, flow_config, dark=False):
         else:
             x1, y1 = arr["x1"], arr["y1"]
             x2, y2 = arr["x2"], arr["y2"]
+        # w_pt=None → используем ARROW_WIDTH_PT (canonical единая толщина).
         add_arrow(
             slide, x1, y1, x2, y2,
             with_head=arr.get("with_head", True),
-            w_pt=arr.get("w_pt", 1.0),
+            w_pt=arr.get("w_pt"),
             dashed=arr.get("dashed", False),
         )
 

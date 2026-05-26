@@ -1,7 +1,7 @@
 {
   "meta": {
-    "source": "regression-baseline для flow_diagram_native (v1.6+)",
-    "rationale": "Минимальная схема: 4 блока в строку + 3 горизонтальные стрелки + 1 пунктирная группа + декор."
+    "source": "regression-baseline для flow_diagram_native (v1.7+)",
+    "rationale": "Линейный pipeline в 1 ряд — НЕ растягиваем на safe-area (правило 2026-05-06). 4 блока + 3 горизонтальные стрелки + 1 пунктирная группа + декор. Текст внутри блоков align=left vanchor=top, поля 12/16."
   },
   "slides": [
     {
@@ -9,32 +9,32 @@
       "dark": false,
       "flow": {
         "header": "Pipeline аналитики",
-        "subtitle": "regression baseline — flow_diagram_native v1.6",
+        "subtitle": "regression baseline — flow_diagram_native v1.7",
         "blocks": [
           {
             "id": "b1",
-            "x": 35, "y": 200, "w": 235, "h": 80,
+            "x": 30, "y": 220, "w": 280, "h": 110,
             "lines": ["Сырые диалоги", "28 782 чата"],
             "font_sizes": [13, 11],
             "bolds": [true, false]
           },
           {
             "id": "b2",
-            "x": 295, "y": 200, "w": 235, "h": 80,
+            "x": 340, "y": 220, "w": 280, "h": 110,
             "lines": ["1. Ловим сломанное", "26 паттернов"],
             "font_sizes": [13, 11],
             "bolds": [true, false]
           },
           {
             "id": "b3",
-            "x": 555, "y": 200, "w": 235, "h": 80,
+            "x": 650, "y": 220, "w": 280, "h": 110,
             "lines": ["2. Реальные состояния", "9 наблюдаемых"],
             "font_sizes": [13, 11],
             "bolds": [true, false]
           },
           {
             "id": "b4",
-            "x": 815, "y": 200, "w": 235, "h": 80,
+            "x": 960, "y": 220, "w": 280, "h": 110,
             "lines": ["3. Mining таксономии", "Embedding + LLM"],
             "font_sizes": [13, 11],
             "bolds": [true, false]
@@ -46,7 +46,7 @@
           {"from": "b3", "to": "b4", "side": "right"}
         ],
         "groups": [
-          {"label": "Phase 1", "x": 27, "y": 174, "w": 251, "h": 116}
+          {"label": "Phase 1", "x": 22, "y": 192, "w": 296, "h": 146}
         ],
         "decor": {
           "enabled": true,
