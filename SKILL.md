@@ -159,7 +159,7 @@ PHASE 3 — GLOBAL VERIFICATION (один раз в конце):
 | `extract_images.py` | Извлекает PNG/JPG из draft.pptx в файлы |
 | **`build_v9.py`** | **JSON plan + шаблон → .pptx, поддержка native slide_type (kpi_native / image_native / chart_pptx_native / chart_native)** |
 | `validate_plan.py` | Gate перед build: auto-add canonical, auto-apply overflow strategy. **v0.20: поддержка native slide_types** |
-| **`kpi_renderer.py`** | **Рисует KPI shapes на blank canvas (3 числа равного размера, 1 accent green)** |
+| **`kpi_renderer.py`** | **Рисует KPI shapes на blank canvas (3 числа равного размера; цифры всегда `#222222`, accent = зелёная плашка-подчёркивание, не зелёный текст — Problem #2)** |
 | **`image_renderer.py`** | **Image-as-content auto-fit (mode: fit/fill, опц. caption в серой плашке)** |
 | **`chart_native_pptx.py`** ⭐ | **DEFAULT для charts (v1.4+). Редактируемая PowerPoint chart через `pptx.chart.add_chart()` — пользователь меняет данные через Edit Data → Excel. Поддержка: area_stacked/area_100/bar/bar_stacked/line/pie** |
 | `chart_engine.py` | Legacy: Matplotlib chart redraw в PNG (canonical pastel palette). Использовать ТОЛЬКО когда нужны custom annotations или прозрачные overlapping areas, которые native chart не умеет |
@@ -251,6 +251,14 @@ PHASE 3 — GLOBAL VERIFICATION (один раз в конце):
 }}
 ```
 
+**Декор-стрелки (Problem #4, 2026-05-29):** `decor` рисует ряд фирменных
+зелёных **стрелок ↗** (древко вверх-вправо + уголок-наконечник, геометрия
+`brand/icons/brand_arrow.svg`). Каждая стрелка — **нативная редактируемая фигура
+PowerPoint** (группа линий `p:grpSp`): сразу двигается/перекрашивается/
+реформируется, без шага «Преобразовать в фигуру». Толщина линии **1pt**.
+(Утилита `add_svg_picture` для вставки SVG-вектора в слайд тоже доступна —
+например для логотипов/иконок — но декор-стрелки делаются нативными фигурами.)
+
 ### Canonical правило v1.4 — editable charts
 
 **Все диаграммы и графики должны быть редактируемыми (`chart_pptx_native`).**
@@ -273,6 +281,58 @@ GREEN никогда не дублируется на не-accent серии.
 - схема / процесс / архитектура (блоки+стрелки) → `flow_diagram_native` ⭐ (v1.6+)
 - регулярная таблица ≥3×3 с шапкой, БЕЗ merged cells → `table_native` ⭐ (v1.8+)
 - **anti-distortion триггер** (merged cells, RACI, color-coded, brand-объекты) → **STOP+ASK** (v1.8+)
+
+### Canonical правило v2.0 — заголовок в TITLE-placeholder (Problem #6)
+
+Заголовок слайда у ВСЕХ native-типов (flow/table/kpi/image/chart) вписывается в
+**штатный TITLE-placeholder шаблона** — единая позиция/размер **(35, 38) / 963×54
+/ 20pt SemiBold CAPS** (графит, на тёмном — белый). Реализовано в общей
+`kpi_renderer.set_slide_title()`; `clean_slide_to_blank()` сохраняет
+title-placeholder (очищая донорский текст). Если на доноре нет placeholder —
+fallback на канонический textbox той же геометрии. Раньше каждый рендерер рисовал
+свой header (35,38 vs 35,60; 20 vs 32pt; CAPS/не-CAPS) — теперь единообразно.
+
+### Canonical правило v2.0 — размер шрифта (Problem #5)
+
+**Стандарт контента = 16pt**, комфортный минимум = **12pt**. Меньше 12pt — только
+при сильной перегрузке слайда (сначала Overflow Strategy). Дефолты native-
+рендереров: flow-блоки и подписи **16pt** (плотные схемы ужимать до 12pt);
+**таблицы — дефолт 16pt с авто-уменьшением** (`_autofit_table_font`: подбирает
+крупнейший размер, при котором текст влезает в ячейки, вниз до 12pt комфортно /
+10pt крайне; форс через `table.font_size`); subtitle **13pt**. `validate_plan`
+ужимает overflow не ниже 12pt; `brand_guardian` даёт WARN `size_below_comfortable`
+при < 12pt и FAIL `size_too_small` при < 10pt.
+
+### Canonical правило v2.0 — эмфаза через SemiBold-face (Problem #3)
+
+Жирность задаётся **именем начертания** `SB Sans Display Semibold` (встроен в
+шаблон → рендерится в PowerPoint везде), а **не bold-флагом**. Все рендереры
+(`flow_renderer`, `table_renderer`, `kpi_renderer`, `image_renderer`,
+`chart_native_pptx`) переводят `bold=true` в face Semibold + `bold=false`. Bold
+(`b=1`) на `SB Sans Display` запрещён (даёт «фейковый» тяжёлый жирный) —
+`brand_guardian` выдаёт WARN `bold_flag`.
+
+**Превью (PNG):** LibreOffice не различает SemiBold (схлопывает в Regular),
+поэтому `render_slides.py` для превью делает временную подмену
+`SB Sans Display Semibold` → `SB Sans Display` + bold-флаг (только во временной
+копии для рендера). В итоге в PNG эмфаза видна жирной, а сам `.pptx` остаётся
+настоящим SemiBold. На валидацию (`brand_guardian` читает `.pptx`) это не влияет.
+
+### Canonical правило v2.0 — контраст текста (Problem #2)
+
+**Текст ВСЕГДА `#222222`** на белом фоне И на зелёной плашке. Запрещено:
+- ❌ зелёный текст на белом (вкл. крупную KPI-цифру 199pt и divider-цифру —
+  они тоже `#222222`, user-decision 2026-05-29);
+- ❌ белый текст на зелёной плашке (`white-on-green`).
+
+Белый текст допустим **только на тёмном** фоне (графит `#222222` / чёрный).
+
+**Акцент** делается не цветом текста, а **цветным ЭЛЕМЕНТОМ**: зелёная
+плашка-подчёркивание (KPI), зелёный divider, footer-плашка, заливка блока
+(с графитовым текстом). В `kpi_renderer` главный показатель помечается зелёной
+плашкой над цифрой (`_add_accent_bar`); в `flow_renderer` зелёная плашка `green`
+теперь несёт графитовый текст. `brand_guardian` выдаёт WARN `colored_text` на
+любой зелёный/белый текст вне допустимых случаев.
 
 ### Canonical правило v1.8 — table_native (zebra) + anti-distortion
 

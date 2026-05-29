@@ -22,7 +22,7 @@ flow_renderer.py — native PowerPoint flow-diagrams / schemas / process maps.
     len=med). Только горизонтальные/вертикальные — диагонали запрещены.
   - Пунктирные рамки для группировки фаз: 1pt #888888 dash.
   - Заголовок: 20pt SemiBold CAPS, top-left (35, 60).
-  - Decor (по бренду): зелёные L-уголки с диагональю — bottom corner.
+  - Decor (по бренду): зелёные стрелки ↗ (нативные фигуры-группы, 1pt) — bottom corner.
   - Safe-area: SAFE_TOP=140, SAFE_BOTTOM=660, SAFE_LEFT=30, SAFE_RIGHT=1250.
     Все координаты блоков должны лежать внутри safe-area.
 
@@ -34,14 +34,14 @@ Config schema (передаётся через plan.json):
     "dark": false,
     "flow": {
       "header": "Заголовок схемы",            # обязательное
-      "subtitle": "...",                       # опц., 11pt под header'ом
-      "subtitle_url": "https://...",           # опц., 9pt серая ссылка
+      "subtitle": "...",                       # опц., 13pt под header'ом
+      "subtitle_url": "https://...",           # опц., 12pt серая ссылка
       "blocks": [
         {
           "id": "b1",                          # опц., для arrows by ref
           "x": 175, "y": 180, "w": 235, "h": 50,
           "lines": ["Title", "subtitle text"],
-          "font_sizes": [13, 11],              # опц.
+          "font_sizes": [16, 16],              # опц., стандарт 16pt (мин 12)
           "bolds": [true, false],              # опц.
           "caps_first": false,                 # опц.
           "fill": "gray|green|dark|white",     # опц., default "gray"
@@ -69,7 +69,7 @@ Config schema (передаётся через plan.json):
          "font_size": 11, "bold": false,
          "align": "left", "caps": false}
       ],
-      "decor": {                               # опц., зелёные L-уголки
+      "decor": {                               # опц., зелёные стрелки ↗ (нативные фигуры, 1pt)
         "enabled": true,
         "count": 4,
         "x_start": 950, "y_start": 625,
@@ -79,6 +79,7 @@ Config schema (передаётся через plan.json):
   }
 """
 import os
+import io
 import json
 
 from pptx.util import Pt, Emu
@@ -131,7 +132,9 @@ GRAPHITE = _from_palette("base", "Black", "#222222")
 WHITE = _from_palette("base", "White", "#FFFFFF")
 GRAY = _from_palette("base", "Gray", "#F2F2F2")
 GREEN = _from_palette("base", "Green", "#26D07C")
-GRAPHITE_DARK = _from_palette("base_alts", "Graphite-Iron", "#343F48")
+# Тёмная плашка = #222222 (canonical 2026-05-29, user-decision). НЕ #343F48 —
+# Graphite-Iron не из палитры Cloud.ru.
+DARK_FILL = GRAPHITE
 DASH_GRAY = RGBColor(0x88, 0x88, 0x88)
 SEPARATOR_GRAY = RGBColor(0xCC, 0xCC, 0xCC)
 
@@ -141,6 +144,20 @@ ARROW_WIDTH_PT = 1.0                        # единая толщина все
 
 
 FONT = "SB Sans Display"
+# Полужирное начертание = ОТДЕЛЬНЫЙ font face, встроенный в шаблон (НЕ bold-флаг).
+# Canonical 2026-05-29 (Problem #3): Bold запрещён — эмфаза только через SemiBold.
+FONT_SEMIBOLD = "SB Sans Display Semibold"
+
+
+def _set_weight(font, semibold):
+    """Эмфаза через начертание SemiBold, а не bold-флаг (Problem #3).
+
+    semibold=True → face «SB Sans Display Semibold» (встроен в шаблон), bold=False.
+    semibold=False → обычный «SB Sans Display».
+    Жирный (bold=True) НЕ используется нигде.
+    """
+    font.name = FONT_SEMIBOLD if semibold else FONT
+    font.bold = False
 
 
 # Safe-area для 1280×720 Cloud.ru slide.
@@ -176,9 +193,11 @@ def _resolve_fill(fill_name):
     if fill_name == "white":
         return WHITE, GRAPHITE
     if fill_name == "green":
-        return GREEN, WHITE
+        # Canonical 2026-05-29 (Problem #2): на зелёной плашке текст #222222,
+        # НЕ белый. White-on-green плохо читается — текст всегда графит.
+        return GREEN, GRAPHITE
     if fill_name == "dark":
-        return GRAPHITE_DARK, WHITE
+        return DARK_FILL, WHITE
     # raw hex
     if isinstance(fill_name, str) and fill_name.startswith("#"):
         return _hex(fill_name), GRAPHITE
@@ -270,7 +289,8 @@ def add_block(slide, x, y, w, h, lines,
     - Поля одинаковые 12px, нижнее 16px.
 
     lines: list[str].
-    font_sizes / bolds: list of same len. По умолчанию [13, 11, 11, ...] / [True, False, ...].
+    font_sizes / bolds: list of same len. По умолчанию [16, 16, ...] (стандарт 16pt,
+        мин 12pt — Problem #5) / [True, False, ...].
     caps_first: первая строка → CAPS.
     fill: "gray" (default) / "white" / "green" / "dark" / hex string.
     align: "left" (default, canonical) / "center" / "right".
@@ -295,7 +315,9 @@ def add_block(slide, x, y, w, h, lines,
     tf.margin_bottom = Emu(16 * EMU)
 
     if font_sizes is None:
-        font_sizes = [13] + [11] * max(0, len(lines) - 1)
+        # Стандарт 16pt (Problem #5, 2026-05-29). Для плотных схем LLM задаёт
+        # меньше через font_sizes, но не ниже 12pt (кроме крайней перегрузки).
+        font_sizes = [16] + [16] * max(0, len(lines) - 1)
     if bolds is None:
         bolds = [True] + [False] * max(0, len(lines) - 1)
 
@@ -314,15 +336,14 @@ def add_block(slide, x, y, w, h, lines,
             _apply_bullet_to_paragraph(p)
         run = p.add_run()
         run.text = clean_line.upper() if (caps_first and i == 0) else clean_line
-        run.font.name = FONT
         run.font.size = Pt(font_sizes[i] if i < len(font_sizes) else font_sizes[-1])
-        run.font.bold = bolds[i] if i < len(bolds) else bolds[-1]
+        _set_weight(run.font, bolds[i] if i < len(bolds) else bolds[-1])
         run.font.color.rgb = text
     return shape
 
 
 def add_label(slide, x, y, w, h, text,
-              font_size=11, bold=False,
+              font_size=16, bold=False,
               align="left", anchor="top", caps=False,
               color=None):
     """Свободная текстовая подпись (без фона)."""
@@ -350,9 +371,8 @@ def add_label(slide, x, y, w, h, text,
             _apply_bullet_to_paragraph(p)
         run = p.add_run()
         run.text = clean_line.upper() if caps else clean_line
-        run.font.name = FONT
         run.font.size = Pt(font_size)
-        run.font.bold = bold
+        _set_weight(run.font, bold)
         run.font.color.rgb = color if color is not None else GRAPHITE
     return box
 
@@ -410,20 +430,11 @@ def add_dashed_rect(slide, x, y, w, h, color=None, w_pt=1.0):
 
 
 def add_header(slide, text, dark=False):
-    """Заголовок слайда — 20pt SemiBold CAPS, top-left (35, 60).
-    Canonical стиль content-слайда шаблона Cloud.ru."""
-    box = slide.shapes.add_textbox(px(35), px(60), px(1209), px(40))
-    tf = box.text_frame
-    tf.vertical_anchor = MSO_ANCHOR.MIDDLE
-    tf.margin_left = Emu(0)
-    p = tf.paragraphs[0]
-    p.alignment = PP_ALIGN.LEFT
-    run = p.add_run()
-    run.text = text.upper()
-    run.font.name = FONT
-    run.font.size = Pt(20)
-    run.font.bold = True
-    run.font.color.rgb = WHITE if dark else GRAPHITE
+    """Заголовок слайда — в штатный TITLE-placeholder шаблона (canonical позиция/
+    размер 35,38 / 963×54 / 20pt SemiBold CAPS). Problem #6, 2026-05-29.
+    Делегирует в общий set_slide_title (с fallback на textbox)."""
+    from kpi_renderer import set_slide_title
+    return set_slide_title(slide, text, dark=dark)
 
 
 def add_top_separator(slide, y=110, color=None):
@@ -435,29 +446,146 @@ def add_top_separator(slide, y=110, color=None):
     conn.line.width = Emu(int(0.5 * 12700))
 
 
+# Фирменная стрелка-декор Cloud.ru (SVG) — стрелка ↗ (диагональ вверх-вправо +
+# уголок-наконечник в верхнем-правом). Хранится в brand/icons/, вставляется как
+# редактируемый вектор (SVG в .pptx) — Problem #4, 2026-05-29.
+DECOR_ARROW_SVG = os.path.join(
+    os.path.dirname(os.path.abspath(__file__)), "..", "brand", "icons", "brand_arrow.svg"
+)
+# URI расширения Microsoft для встраивания SVG в blip + namespace asvg.
+_SVG_EXT_URI = "{96DAC541-7B7A-43D3-8B79-37D633B846F1}"
+_ASVG_NS = "http://schemas.microsoft.com/office/drawing/2016/SVG/main"
+
+
+# Толщина линии декор-стрелки = 1pt (как обычные линии в PowerPoint),
+# user-decision 2026-05-29. SVG масштабируется, поэтому stroke-width в SVG
+# вычисляется так, чтобы при размере декора отрисовалось ровно 1pt.
+DECOR_STROKE_PT = 1.0
+# 1pt = 12700 EMU; наш px = 9525 EMU ⇒ display_pt = size_px * 9525/12700.
+# stroke_svg = target_pt * 101(viewBox) / display_pt.
+_PT_PER_PX = 9525.0 / 12700.0  # = 0.75
+
+
+def _brand_arrow_svg_bytes(stroke_width_svg):
+    """Берёт canonical brand_arrow.svg и проставляет нужный stroke-width
+    (в единицах viewBox), чтобы при текущем размере линия была 1pt."""
+    import re
+    with open(DECOR_ARROW_SVG, encoding="utf-8") as f:
+        svg = f.read()
+    svg = re.sub(r'\s*stroke-width="[^"]*"', "", svg)  # убрать старые
+    svg = re.sub(r'(stroke="[^"]*")',
+                 r'\1 stroke-width="%.3f"' % stroke_width_svg, svg)
+    return svg.encode("utf-8")
+
+
+def _svg_bytes_to_png(svg_bytes, scale=8):
+    """Растрирует SVG-байты → PNG (RGBA) через PyMuPDF — fallback-картинка для
+    LibreOffice/старых вьюеров. PowerPoint рисует сам SVG."""
+    import fitz
+    doc = fitz.open(stream=svg_bytes, filetype="svg")
+    page = doc[0]
+    pix = page.get_pixmap(matrix=fitz.Matrix(scale, scale), alpha=True)
+    data = pix.tobytes("png")
+    doc.close()
+    return data
+
+
+def add_svg_picture(slide, svg_bytes, x, y, w, h):
+    """Вставляет SVG (байты) как РЕДАКТИРУЕМЫЙ вектор в слайд.
+
+    Технически: picture с PNG-fallback (r:embed) + расширение <asvg:svgBlip>,
+    указывающее на встроенную SVG-часть. В PowerPoint объект — настоящий SVG
+    (можно «Преобразовать в фигуру» / перекрасить), в превью рисуется PNG.
+    """
+    from pptx.opc.package import Part
+    from pptx.opc.constants import RELATIONSHIP_TYPE as RT
+
+    png_bytes = _svg_bytes_to_png(svg_bytes)
+    pic = slide.shapes.add_picture(io.BytesIO(png_bytes), px(x), px(y), px(w), px(h))
+
+    package = slide.part.package
+    partname = package.next_partname("/ppt/media/image%d.svg")
+    svg_part = Part(partname, "image/svg+xml", package, svg_bytes)
+    rId = slide.part.relate_to(svg_part, RT.IMAGE)
+
+    blip_fill = pic._element.find(qn("p:blipFill"))
+    blip = blip_fill.find(qn("a:blip"))
+    ext_lst = etree.SubElement(blip, qn("a:extLst"))
+    ext = etree.SubElement(ext_lst, qn("a:ext"))
+    ext.set("uri", _SVG_EXT_URI)
+    svg_blip = etree.SubElement(ext, "{%s}svgBlip" % _ASVG_NS)
+    svg_blip.set(qn("r:embed"), rId)
+    return pic
+
+
+def _draw_arrow_lines(slide, x, y, size, w_pt, color):
+    """Рисует фирменную стрелку ↗ нативными линиями PowerPoint, возвращает список
+    линий-фигур. Геометрия = brand_arrow.svg: уголок-наконечник ↗ (верхняя грань +
+    правая грань) + диагональ-древко из нижнего-левого к наконечнику."""
+    c = color if color is not None else GREEN
+    top = slide.shapes.add_connector(
+        MSO_CONNECTOR.STRAIGHT, px(x), px(y), px(x + size), px(y))
+    right = slide.shapes.add_connector(
+        MSO_CONNECTOR.STRAIGHT, px(x + size), px(y), px(x + size), px(y + size))
+    shaft = slide.shapes.add_connector(
+        MSO_CONNECTOR.STRAIGHT,
+        px(x), px(y + size), px(x + int(size * 0.9)), px(y + int(size * 0.1)))
+    for ln in (top, right, shaft):
+        ln.line.color.rgb = c
+        ln.line.width = Emu(int(w_pt * 12700))
+    return [top, right, shaft]
+
+
+def _next_shape_id(slide):
+    """Следующий свободный shape id на слайде (для группы)."""
+    ids = [1]
+    for el in slide.shapes._spTree.iter(qn("p:cNvPr")):
+        v = el.get("id")
+        if v and v.isdigit():
+            ids.append(int(v))
+    return max(ids) + 1
+
+
+def _group_shapes(slide, shape_list, x, y, w, h, name="BrandArrow"):
+    """Оборачивает фигуры в группу (p:grpSp) с identity-трансформом — стрелка
+    становится ОДНОЙ редактируемой фигурой (как результат «Преобразовать в фигуру»)."""
+    spTree = slide.shapes._spTree
+    grp = etree.SubElement(spTree, qn("p:grpSp"))
+    nv = etree.SubElement(grp, qn("p:nvGrpSpPr"))
+    cNvPr = etree.SubElement(nv, qn("p:cNvPr"))
+    cNvPr.set("id", str(_next_shape_id(slide)))
+    cNvPr.set("name", name)
+    etree.SubElement(nv, qn("p:cNvGrpSpPr"))
+    etree.SubElement(nv, qn("p:nvPr"))
+    grp_pr = etree.SubElement(grp, qn("p:grpSpPr"))
+    xfrm = etree.SubElement(grp_pr, qn("a:xfrm"))
+    ox, oy, cx, cy = int(px(x)), int(px(y)), int(px(w)), int(px(h))
+    off = etree.SubElement(xfrm, qn("a:off")); off.set("x", str(ox)); off.set("y", str(oy))
+    ext = etree.SubElement(xfrm, qn("a:ext")); ext.set("cx", str(cx)); ext.set("cy", str(cy))
+    ch_off = etree.SubElement(xfrm, qn("a:chOff")); ch_off.set("x", str(ox)); ch_off.set("y", str(oy))
+    ch_ext = etree.SubElement(xfrm, qn("a:chExt")); ch_ext.set("cx", str(cx)); ch_ext.set("cy", str(cy))
+    for shp in shape_list:
+        grp.append(shp._element)  # reparent линии внутрь группы
+    return grp
+
+
 def add_decor_diagonals(slide,
                         count=4, x_start=20, y_start=620,
-                        size=70, gap=14, w_pt=1.4, color=None):
-    """Зелёные L-уголки с диагональю — фирменный декор Cloud.ru.
+                        size=70, gap=14, w_pt=DECOR_STROKE_PT, color=None):
+    """Фирменный декор Cloud.ru — ряд зелёных стрелок ↗.
+
+    Canonical 2026-05-29 (Problem #4, обновлено): каждая стрелка = НАТИВНАЯ
+    редактируемая ФИГУРА PowerPoint (группа линий), а не картинка — её сразу
+    можно двигать/перекрашивать/реформировать, без «Преобразовать в фигуру».
+    Древко ↗ + уголок-наконечник (геометрия brand_arrow.svg), линия 1pt.
 
     Ставится в bottom-left или bottom-right (свободный угол).
     """
-    c = color if color is not None else GREEN
     for i in range(count):
         x = x_start + i * (size + gap)
         y = y_start
-        h_line = slide.shapes.add_connector(
-            MSO_CONNECTOR.STRAIGHT, px(x), px(y), px(x + size), px(y)
-        )
-        v_line = slide.shapes.add_connector(
-            MSO_CONNECTOR.STRAIGHT, px(x + size), px(y), px(x + size), px(y + size)
-        )
-        d_line = slide.shapes.add_connector(
-            MSO_CONNECTOR.STRAIGHT, px(x), px(y), px(x + size), px(y + size)
-        )
-        for ln in (h_line, v_line, d_line):
-            ln.line.color.rgb = c
-            ln.line.width = Emu(int(w_pt * 12700))
+        lines = _draw_arrow_lines(slide, x, y, size, w_pt, color)
+        _group_shapes(slide, lines, x, y, size, size, name="BrandArrow")
 
 
 # ============================================================================
@@ -496,13 +624,13 @@ def render_flow_diagram_slide(slide, flow_config, dark=False):
     # 1a. Subtitle / URL
     subtitle = flow_config.get("subtitle")
     if subtitle:
-        add_label(slide, 35, 122, 800, 22, subtitle,
-                  font_size=11, bold=False, align="left",
+        add_label(slide, 35, 120, 1000, 24, subtitle,
+                  font_size=13, bold=False, align="left",
                   color=WHITE if dark else GRAPHITE)
     subtitle_url = flow_config.get("subtitle_url")
     if subtitle_url:
-        add_label(slide, 35, 142, 800, 18, subtitle_url,
-                  font_size=9, bold=False, align="left",
+        add_label(slide, 35, 144, 1000, 20, subtitle_url,
+                  font_size=12, bold=False, align="left",
                   color=DASH_GRAY)
 
     # 2. Blocks — собираем по id для arrow refs
@@ -530,9 +658,9 @@ def render_flow_diagram_slide(slide, flow_config, dark=False):
         label_text = grp.get("label")
         if label_text:
             label_pos = grp.get("label_pos", "top")
-            label_y = gy + 2 if label_pos == "top" else gy + gh - 18
-            add_label(slide, gx, label_y, gw, 16, label_text,
-                      font_size=10, bold=True, align="center")
+            label_y = gy + 2 if label_pos == "top" else gy + gh - 20
+            add_label(slide, gx, label_y, gw, 18, label_text,
+                      font_size=12, bold=True, align="center")
 
     # 4. Arrows
     for arr in flow_config.get("arrows", []):

@@ -39,11 +39,17 @@
 - **Chart:** для данных — гистограмма / pie через Chart placeholder
 
 ### Цвета фигур
-- Главный шаг/блок: Green `#26D07C`
+- Главный шаг/блок: Green `#26D07C` (заливка-акцент)
 - Промежуточные: Gray `#F2F2F2`
-- Текст на Green/Black: White `#FFFFFF`
-- Текст на Gray/White: Black `#222222`
+- **Текст ВСЕГДА `#222222`** на Green / Gray / White (Problem #2, 2026-05-29).
+- Текст White `#FFFFFF` — **только на тёмном** (графит `#222222` / чёрный).
+- ❌ Запрещено: белый текст на зелёной плашке, зелёный текст на белом.
 - Стрелки/линии: Black `#222222`, толщина 1pt (square caps)
+
+### Шрифт и начертание (Problem #3, 2026-05-29)
+- Обычный текст: `"font": "SB Sans Display"`.
+- **Эмфаза/заголовки шага: `"font": "SB Sans Display Semibold"`** — НЕ bold-флаг.
+- ❌ Никогда не ставить отдельный признак «bold»: жирность только через face Semibold.
 
 ### Размеры
 - Слайд real px: 1280×720 (EMU 12192000×6858000)
@@ -71,7 +77,7 @@
   "slide_num": 7,
   "infographic_type": "process",
   "shapes": [
-    {"type": "rectangle", "left_emu": 1000000, "top_emu": 2500000, "width_emu": 2000000, "height_emu": 1000000, "fill_color": "#26D07C", "stroke_color": "none", "text": "Анализ", "font": "SB Sans Display", "font_size_pt": 18, "font_color": "#FFFFFF"},
+    {"type": "rectangle", "left_emu": 1000000, "top_emu": 2500000, "width_emu": 2000000, "height_emu": 1000000, "fill_color": "#26D07C", "stroke_color": "none", "text": "Анализ", "font": "SB Sans Display", "font_size_pt": 18, "font_color": "#222222"},
     {"type": "arrow", "left_emu": 3050000, "top_emu": 2900000, "width_emu": 400000, "height_emu": 200000, "fill_color": "#222222"},
     {"type": "rectangle", "left_emu": 3500000, "top_emu": 2500000, "width_emu": 2000000, "height_emu": 1000000, "fill_color": "#F2F2F2", "stroke_color": "#222222", "stroke_width_pt": 1, "text": "Дизайн", "font": "SB Sans Display", "font_size_pt": 18, "font_color": "#222222"},
     {"type": "arrow", "left_emu": 5550000, "top_emu": 2900000, "width_emu": 400000, "height_emu": 200000, "fill_color": "#222222"},

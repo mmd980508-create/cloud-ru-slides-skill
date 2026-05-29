@@ -18,7 +18,7 @@ from PIL import Image as PILImage
 
 from kpi_renderer import (
     GRAPHITE, GREEN, WHITE, _add_text_box, clean_slide_to_blank,
-    BLANK_DONOR_WHITE, BLANK_DONOR_DARK
+    set_slide_title, BLANK_DONOR_WHITE, BLANK_DONOR_DARK
 )
 
 EMU = 9525
@@ -37,13 +37,10 @@ def render_image_native(slide, image_config, dark=False, wide_zone=False):
     """
     text_color = WHITE if dark else GRAPHITE
 
-    # Title — canonical §1: 32pt SemiBold для chart/image слайдов (header label)
+    # Title — в штатный placeholder шаблона, единый стиль (Problem #6)
     title = image_config.get("title", "")
     if title:
-        title_size = 32 if wide_zone else 20
-        _add_text_box(slide, 35, 38, 1209, 70 if wide_zone else 53, title,
-                      font_size_pt=title_size, bold=True, color=text_color,
-                      anchor=MSO_ANCHOR.MIDDLE)
+        set_slide_title(slide, title, dark=dark)
 
     # Image zone bounds (px) — wide_zone расширяет width, оставляя место для caption
     if wide_zone:

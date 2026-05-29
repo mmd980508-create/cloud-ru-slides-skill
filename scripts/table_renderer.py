@@ -8,13 +8,14 @@ flow_diagram_native (что лишало пользователя редакти
 
 Решение: native PPT table через `slide.shapes.add_table(rows, cols, ...)`, со
 стилем slide 56 шаблона Cloud.ru:
-  - Header row: белый фон, текст SemiBold 12pt #222222
+  - Header row: белый фон, текст SemiBold #222222
   - Body rows: чередуются #F2F2F2 (серый) / белый (zebra)
   - Vertical separators между колонками: 0.5pt #C8C8C8 (только справа от ячеек,
     кроме последней колонки в каждом ряду)
   - НЕТ горизонтальных границ между строками — зебра-фон сам создаёт разделение
   - Padding в ячейках: L/R 12px, T/B 8px (canonical: 12/8)
-  - Шрифт: SB Sans Display, 12pt для header (bold), 11pt для body (regular)
+  - Шрифт: SB Sans Display. Размер — дефолт 16pt с авто-уменьшением до 12pt
+    (Problem #5), header SemiBold того же размера. Форс: table.font_size.
   - Цвет текста: #222222 (графит)
   - Выравнивание текста: **align=left, vanchor=top** (canonical правило)
   - Первая колонка может быть шире (для row labels / категорий) через
@@ -174,6 +175,15 @@ def _apply_bullet_to_paragraph_table(p, char=BULLET_CHAR, indent_emu=BULLET_INDE
     buChar.set("char", char)
 
 FONT = "SB Sans Display"
+# Полужирное = отдельный font face (встроен в шаблон), НЕ bold-флаг.
+# Canonical 2026-05-29 (Problem #3): Bold запрещён — эмфаза только через SemiBold.
+FONT_SEMIBOLD = "SB Sans Display Semibold"
+
+
+def _set_weight(font, semibold):
+    """Эмфаза через начертание SemiBold, а не bold-флаг (Problem #3)."""
+    font.name = FONT_SEMIBOLD if semibold else FONT
+    font.bold = False
 
 
 # ============================================================================
@@ -246,7 +256,7 @@ def _set_cell_margins(cell, left_px=12, right_px=12, top_px=8, bottom_px=8):
     tcPr.set("marB", str(bottom_px * EMU))
 
 
-def _set_cell_text(cell, text, size_pt=11, bold=False, color_rgb=None):
+def _set_cell_text(cell, text, size_pt=12, bold=False, color_rgb=None):
     """Записать текст в ячейку с canonical стилями (left + top, font SB Sans).
 
     Поддержка multi-line + native PP bullets:
@@ -271,10 +281,59 @@ def _set_cell_text(cell, text, size_pt=11, bold=False, color_rgb=None):
             _apply_bullet_to_paragraph_table(p)
         run = p.add_run()
         run.text = clean_line
-        run.font.name = FONT
         run.font.size = Pt(size_pt)
-        run.font.bold = bold
+        _set_weight(run.font, bold)
         run.font.color.rgb = color_rgb if color_rgb is not None else GRAPHITE
+
+
+# Размер шрифта в таблице (Problem #5, 2026-05-29): дефолт 16pt, авто-уменьшение
+# вниз до 12pt (комфортный минимум), 10pt — крайняя перегрузка.
+TABLE_FONT_DEFAULT_PT = 16
+TABLE_FONT_COMFORT_MIN_PT = 12
+TABLE_FONT_HARD_MIN_PT = 10
+_CELL_MARGIN_X_PX = 24   # 12 + 12
+_CELL_MARGIN_V_PX = 16   # 8 + 8
+
+
+def _estimate_cell_lines(text, usable_w_px, char_w_px):
+    """Оценка числа строк, на которые перенесётся текст в ячейке."""
+    if text in (None, ""):
+        return 1
+    cpl = max(1, int(usable_w_px / char_w_px))  # символов в строку
+    lines = 0
+    for seg in str(text).split("\n"):
+        seg_len = len(seg) if seg else 1
+        lines += max(1, -(-seg_len // cpl))  # ceil деление
+    return max(1, lines)
+
+
+def _autofit_table_font(headers, data, col_widths, row_h, header_h,
+                        start_pt=TABLE_FONT_DEFAULT_PT,
+                        hard_min=TABLE_FONT_HARD_MIN_PT):
+    """Подбирает крупнейший размер шрифта (≤ start_pt), при котором текст всех
+    ячеек влезает по ширине/высоте. Старт 16pt, шаг вниз до hard_min.
+
+    Эвристика по ширине символа SB Sans (~0.6em) и межстрочному (~1.25).
+    """
+    rows = [headers] + list(data)
+    for fpt in range(int(start_pt), int(hard_min) - 1, -1):
+        font_px = fpt * 4.0 / 3.0          # pt → px
+        char_w = 0.60 * font_px            # средняя ширина символа
+        line_h = 1.25 * font_px            # высота строки с интерлиньяжем
+        fits = True
+        for r_i, row in enumerate(rows):
+            avail_h = (header_h if r_i == 0 else row_h) - _CELL_MARGIN_V_PX
+            for c_i, cell in enumerate(row):
+                usable_w = col_widths[c_i] - _CELL_MARGIN_X_PX
+                lines = _estimate_cell_lines(cell, usable_w, char_w)
+                if lines * line_h > avail_h:
+                    fits = False
+                    break
+            if not fits:
+                break
+        if fits:
+            return fpt
+    return int(hard_min)
 
 
 def _strip_default_table_style(table):
@@ -305,21 +364,11 @@ def _strip_default_table_style(table):
 # Header слайда + subtitle (общая часть для table_native)
 # ============================================================================
 def _add_slide_header(slide, text, dark=False):
-    """Заголовок слайда — 20pt SemiBold CAPS, top-left (35, 60). Canonical."""
-    box = slide.shapes.add_textbox(
-        Emu(35 * EMU), Emu(60 * EMU), Emu(1209 * EMU), Emu(40 * EMU)
-    )
-    tf = box.text_frame
-    tf.vertical_anchor = MSO_ANCHOR.MIDDLE
-    tf.margin_left = Emu(0)
-    p = tf.paragraphs[0]
-    p.alignment = PP_ALIGN.LEFT
-    run = p.add_run()
-    run.text = text.upper()
-    run.font.name = FONT
-    run.font.size = Pt(20)
-    run.font.bold = True
-    run.font.color.rgb = WHITE if dark else GRAPHITE
+    """Заголовок слайда — в штатный TITLE-placeholder шаблона (canonical 35,38 /
+    963×54 / 20pt SemiBold CAPS). Problem #6, 2026-05-29.
+    Делегирует в общий set_slide_title (с fallback на textbox)."""
+    from kpi_renderer import set_slide_title
+    return set_slide_title(slide, text, dark=dark)
 
 
 def _add_top_separator(slide, y=110):
@@ -452,13 +501,23 @@ def render_table_native(slide, table_config, dark=False):
     # независимо от applied table style.
     no_borders = {"left": False, "right": False, "top": False, "bottom": False}
 
+    # Размер шрифта (Problem #5): дефолт 16pt, авто-уменьшение пока не влезает
+    # (до 12pt комфортно, 10pt — крайняя перегрузка). Можно форсировать
+    # table_config["font_size"]. Header и body — один размер, header SemiBold.
+    forced = table_config.get("font_size")
+    if forced:
+        body_font = int(forced)
+    else:
+        body_font = _autofit_table_font(headers, data, col_widths, row_h, header_h)
+    header_font = body_font
+
     # 7. Заполнить header row (row 0)
     for c_idx, header_text in enumerate(headers):
         cell = table.cell(0, c_idx)
         _set_cell_fill(cell, None)  # noFill — белая/прозрачная
         _set_cell_margins(cell, left_px=12, right_px=12, top_px=8, bottom_px=8)
         _set_cell_borders(cell, **no_borders)
-        _set_cell_text(cell, header_text, size_pt=12, bold=True)
+        _set_cell_text(cell, header_text, size_pt=header_font, bold=True)
 
     # 8. Заполнить data rows (row 1..N) — zebra
     for r_idx, row_data in enumerate(data):
@@ -472,7 +531,7 @@ def render_table_native(slide, table_config, dark=False):
             _set_cell_fill(cell, fill_rgb)
             _set_cell_margins(cell, left_px=12, right_px=12, top_px=8, bottom_px=8)
             _set_cell_borders(cell, **no_borders)
-            _set_cell_text(cell, cell_text, size_pt=11, bold=False)
+            _set_cell_text(cell, cell_text, size_pt=body_font, bold=False)
 
     # 9. Нарисовать границы как отдельные connector lines поверх таблицы.
     # Это гарантирует visibility во всех приложениях.

@@ -5,9 +5,9 @@
   "version": "2026.1",
 
   "blank_donors": {
-    "_doc": "Слайды с минимальным контентом — используются как 'чистый холст' для native renderers (kpi/image/chart_pptx_native).",
+    "_doc": "Слайды с минимальным контентом — используются как 'чистый холст' для native renderers (kpi/image/chart_pptx_native). white=30 (layout 'Контент / Белый 1', bg #FFFFFF), dark=51 (layout 'Контент / темный 1', bg #222222). У обоих TITLE-placeholder в (35,38). ИСПРАВЛЕНО 2026-05-29: было dark=22, но слайд 22 — белый layout (бага: тёмные слайды выходили белыми).",
     "white": 30,
-    "dark": 22
+    "dark": 51
   },
 
   "guide_donors": {

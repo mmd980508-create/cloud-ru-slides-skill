@@ -39,7 +39,7 @@ _PALETTE_FALLBACK = {
         "Blue": "#C0E0FC", "Black": "#222222", "White": "#FFFFFF", "Gray": "#F2F2F2",
     },
     "base_alts": {
-        "Black-pure-alt": "#000000", "Graphite-Iron": "#343F48",
+        "Black-pure-alt": "#000000",
         "Green-alt": "#00D97B", "Black-soft-alt-1": "#181818",
         "Black-soft-alt-2": "#2B2B2B", "Green-dark-alt": "#1AB066",
     },
@@ -51,10 +51,10 @@ _PALETTE_FALLBACK = {
         "Coral": "#FF0642", "Coral3": "#E25B7C",
     },
     "text_neutral": [
-        "#222222", "#000000", "#181818", "#2B2B2B", "#343F48",
+        "#222222", "#000000", "#181818", "#2B2B2B",
         "#F2F2F2", "#C8C8C8", "#888888", "#BDBDBD", "#666666",
     ],
-    "text_dark_extra": ["#FFFFFF", "#26D07C", "#00D97B", "#1AB066", "#1ABF6F"],
+    "text_dark_extra": ["#FFFFFF"],  # 2026-05-29 (Problem #2): зелёный текст запрещён везде
     "green_for_arrows": ["#26D07C", "#00D97B", "#1AB066", "#1ABF6F"],
 }
 
@@ -102,7 +102,9 @@ def is_font_allowed(font_name):
             return True
     return False
 
-MIN_FONT_PT = 10
+MIN_FONT_PT = 10           # жёсткий пол: < 10pt → FAIL (нечитаемо даже в перегрузке)
+COMFORTABLE_MIN_PT = 12    # комфортный минимум (Problem #5): < 12pt → WARN (только перегрузка)
+STANDARD_FONT_PT = 16      # стандартный размер контента (Problem #5, 2026-05-29)
 MAX_GREEN_AREA_PCT = 30  # зелёный должен быть акцентом, ≤ 30% площади
 EMU_PER_PT = 12700
 
@@ -111,7 +113,10 @@ EMU_PER_PT = 12700
 # Источник: brand/palette.json (text_neutral, text_dark_extra).
 TEXT_NEUTRAL_HEXES = tuple(_PAL.get("text_neutral",
                                      _PALETTE_FALLBACK["text_neutral"]))
-# На тёмных слайдах дополнительно разрешены белый и фирменный зелёный.
+# На тёмных слайдах дополнительно разрешён только белый текст.
+# Canonical 2026-05-29 (Problem #2): зелёный как ЦВЕТ ТЕКСТА запрещён везде
+# (вкл. тёмные слайды и крупные KPI/divider-цифры). Зелёный — только как
+# цветной ЭЛЕМЕНТ (плашка/divider/заливка), не буквы/цифры.
 TEXT_DARK_BG_EXTRA_HEXES = tuple(_PAL.get("text_dark_extra",
                                            _PALETTE_FALLBACK["text_dark_extra"]))
 TEXT_COLOR_TOLERANCE = 20
@@ -258,15 +263,31 @@ def check_text_frame(tf, slide_width_emu=12192000, slide_height_emu=6858000, is_
                     "msg": f"Шрифт '{font_name}' не в allowed (SB Sans*, Verdana, Pingfang, theme-fonts)"
                 })
 
-            # 2. Размер
+            # 2. Размер (Problem #5: стандарт 16pt, комфортный минимум 12pt).
             if font.size:
                 pt = font.size.pt
                 if pt < MIN_FONT_PT:
                     issues["violations"].append({
                         "type": "size_too_small",
                         "text_preview": text_run[:30],
-                        "msg": f"Размер {pt}pt < минимума {MIN_FONT_PT}pt"
+                        "msg": f"Размер {pt}pt < жёсткого минимума {MIN_FONT_PT}pt — нечитаемо"
                     })
+                elif pt < COMFORTABLE_MIN_PT:
+                    issues["warnings"].append({
+                        "type": "size_below_comfortable",
+                        "text_preview": text_run[:30],
+                        "msg": (f"Размер {pt}pt < {COMFORTABLE_MIN_PT}pt. Стандарт {STANDARD_FONT_PT}pt; "
+                                f"меньше {COMFORTABLE_MIN_PT}pt — только при сильной перегрузке слайда.")
+                    })
+
+            # 2b. Bold-флаг запрещён (Problem #3 2026-05-29): эмфаза только через
+            # начертание «SB Sans Display Semibold», не через bold (b=1).
+            if font.bold:
+                issues["warnings"].append({
+                    "type": "bold_flag",
+                    "text_preview": text_run[:30],
+                    "msg": "Bold-флаг (b=1). По бренду эмфаза только через начертание «SB Sans Display Semibold», не bold.",
+                })
 
             # 3. Цвет (с tolerance для близких к палитре)
             try:
@@ -293,8 +314,9 @@ def check_text_frame(tf, slide_width_emu=12192000, slide_height_emu=6858000, is_
                                     "msg": f"Цвет {hx} не в палитре (base/extended)"
                                 })
 
-                        # Правило B: текст должен быть нейтральным (графит/серый, +белый/зелёный на тёмных).
-                        # Цветной текст (фиолетовый, жёлтый, голубой и т.д.) — WARN.
+                        # Правило B: текст должен быть нейтральным (графит/серый;
+                        # +белый только на тёмных). Зелёный/цветной текст — WARN везде
+                        # (Problem #2 2026-05-29: зелёный — только цветной элемент, не текст).
                         if _text_color_violates(hx, is_dark):
                             bg_hint = "тёмном" if is_dark else "светлом"
                             issues["warnings"].append({
@@ -302,8 +324,10 @@ def check_text_frame(tf, slide_width_emu=12192000, slide_height_emu=6858000, is_
                                 "text_preview": text_run[:30],
                                 "msg": (
                                     f"Цветной текст {hx} на {bg_hint} фоне. По бренду текст "
-                                    f"должен быть графит (#222222) или серый"
-                                    + (", допустим белый/зелёный на тёмных." if is_dark else ".")
+                                    f"всегда графит (#222222) или серый"
+                                    + (", на тёмном — белый. Зелёный/цвет — только как плашка/элемент."
+                                       if is_dark else
+                                       ". Зелёный/белый как текст запрещён — акцент делать цветным элементом.")
                                 ),
                             })
             except Exception:
@@ -427,6 +451,19 @@ def _shape_fill_hex(shape):
         return hex_color(fill.fore_color.rgb)
     except Exception:
         return None
+
+
+def _hex_is_dark(hx):
+    """True если цвет тёмный (luminance < 128) — фон, на котором белый текст ОК."""
+    if not hx or len(hx) != 7:
+        return False
+    try:
+        r = int(hx[1:3], 16)
+        g = int(hx[3:5], 16)
+        b = int(hx[5:7], 16)
+        return (0.299 * r + 0.587 * g + 0.114 * b) < 128
+    except Exception:
+        return False
 
 
 def _line_has_arrowhead(shape):
@@ -646,7 +683,11 @@ def validate_slide(slide, slide_num):
             continue
 
         result["stats"]["text_frames"] += 1
-        issues = check_text_frame(tf, is_dark=is_dark)
+        # Контекст «тёмный» = тёмный слайд ИЛИ тёмная плашка под текстом.
+        # Белый текст на тёмной плашке (fill #222222/чёрный) — легитимен,
+        # не помечать как colored_text (Problem #2 false-positive guard).
+        shape_is_dark = is_dark or _hex_is_dark(_shape_fill_hex(shape))
+        issues = check_text_frame(tf, is_dark=shape_is_dark)
 
         # Префиксируем shape_idx в каждый violation
         for v in issues["violations"]:

@@ -192,9 +192,9 @@ def validate_slide(slide_idx, slide, donors):
             overflow_ratio = text_len / max_chars
             if overflow_ratio <= 1.3:
                 base_size = donor_slot.get("size_pt", 60)
-                # Уменьшаем на ~20-25% (но не ниже 10pt)
+                # Уменьшаем на ~20-25% (но не ниже 12pt — комфортный минимум, Problem #5)
                 reduction_pct = min(25, max(15, int((overflow_ratio - 1.0) * 100 * 1.5)))
-                new_size = max(10, round(base_size * (1 - reduction_pct / 100)))
+                new_size = max(12, round(base_size * (1 - reduction_pct / 100)))
                 slot_override = dict(overrides.get(slot_name, {}))
                 if "size_pt" not in slot_override:
                     slot_override["size_pt"] = new_size

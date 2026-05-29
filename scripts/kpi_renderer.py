@@ -32,6 +32,7 @@ from pptx.util import Pt, Emu
 from pptx.dml.color import RGBColor
 from pptx.enum.text import PP_ALIGN, MSO_ANCHOR
 from pptx.enum.shapes import MSO_SHAPE
+from pptx.oxml.ns import qn
 
 
 def _load_template_version():
@@ -59,6 +60,11 @@ GRAPHITE = RGBColor(0x22, 0x22, 0x22)
 GREEN = RGBColor(0x26, 0xD0, 0x7C)
 WHITE = RGBColor(0xFF, 0xFF, 0xFF)
 
+FONT = "SB Sans Display"
+# Полужирное = отдельный font face (встроен в шаблон), НЕ bold-флаг.
+# Canonical 2026-05-29 (Problem #3): Bold запрещён — эмфаза только через SemiBold.
+FONT_SEMIBOLD = "SB Sans Display Semibold"
+
 
 # Canonical §4 (slide 43): фрейм 199pt помещает максимум 2 значащих цифры.
 KPI_HERO_DIGIT_LIMIT = 2
@@ -84,10 +90,14 @@ def _count_significant_digits(value):
 
 
 def _add_text_box(slide, left_px, top_px, width_px, height_px, text,
-                  font_size_pt=14, font_name="SB Sans Display",
+                  font_size_pt=14, font_name=None,
                   bold=False, color=GRAPHITE, align=PP_ALIGN.LEFT,
                   anchor=MSO_ANCHOR.TOP):
-    """Add text box with canonical font/size/color."""
+    """Add text box with canonical font/size/color.
+
+    Эмфаза (bold=True) реализуется через начертание SemiBold, а не bold-флаг
+    (Problem #3 2026-05-29). font_name=None → авто: Regular или Semibold по bold.
+    """
     EMU = 9525
     box = slide.shapes.add_textbox(
         Emu(left_px * EMU), Emu(top_px * EMU),
@@ -104,25 +114,106 @@ def _add_text_box(slide, left_px, top_px, width_px, height_px, text,
     p.alignment = align
     run = p.add_run()
     run.text = text
-    run.font.name = font_name
+    # SemiBold через face, Bold-флаг не используем
+    if font_name is None:
+        run.font.name = FONT_SEMIBOLD if bold else FONT
+    else:
+        run.font.name = font_name
     run.font.size = Pt(font_size_pt)
-    run.font.bold = bold
+    run.font.bold = False
     run.font.color.rgb = color
     return box
 
 
-def clean_slide_to_blank(slide):
-    """Удалить все shapes на slide. Layout-inherited (logo, footer) останутся.
-    Возвращает чистый canvas для KPI rendering."""
+def _add_accent_bar(slide, left_px, top_px, width_px, height_px, color=GREEN):
+    """Зелёная подчёркивающая плашка-акцент под главной KPI-цифрой.
+
+    Canonical 2026-05-29 (Problem #2): акцент НЕ цветом текста, а отдельным
+    цветным элементом. Сама цифра остаётся #222222 (светлый) / белой (тёмный),
+    а «главный показатель» помечается этой зелёной плашкой.
+    """
+    EMU = 9525
+    shape = slide.shapes.add_shape(
+        MSO_SHAPE.RECTANGLE,
+        Emu(left_px * EMU), Emu(top_px * EMU),
+        Emu(width_px * EMU), Emu(height_px * EMU),
+    )
+    shape.fill.solid()
+    shape.fill.fore_color.rgb = color
+    shape.line.fill.background()  # без рамки
+    # без эффектов (брендбук: no shadow/glow)
+    spPr = shape._element.spPr
+    for tag in ("effectLst", "effectDag"):
+        for e in spPr.findall(qn(f"a:{tag}")):
+            spPr.remove(e)
+    return shape
+
+
+def _is_title_placeholder(sp):
+    """sp (<p:sp>) — это title/ctrTitle placeholder шаблона?"""
+    nv = sp.find(qn("p:nvSpPr"))
+    if nv is None:
+        return False
+    nvpr = nv.find(qn("p:nvPr"))
+    if nvpr is None:
+        return False
+    ph = nvpr.find(qn("p:ph"))
+    if ph is None:
+        return False
+    return ph.get("type") in ("title", "ctrTitle")
+
+
+def clean_slide_to_blank(slide, keep_title=True):
+    """Удалить все shapes на slide, КРОМЕ title-placeholder шаблона (если
+    keep_title). Title-placeholder сохраняется и очищается от донорского текста,
+    чтобы заголовок вписывался в штатное место шаблона (Problem #6, 2026-05-29).
+    Layout-inherited (logo, footer) останутся."""
     spTree = slide.shapes._spTree
-    # Удаляем все sp (shapes) — keep nvGrpSpPr и grpSpPr (структурные)
     to_remove = []
     for child in list(spTree):
         tag = child.tag.split('}')[-1] if '}' in child.tag else child.tag
         if tag in ('sp', 'pic', 'graphicFrame', 'cxnSp', 'grpSp'):
+            if keep_title and tag == 'sp' and _is_title_placeholder(child):
+                # сохранить placeholder, но очистить донорский текст
+                txBody = child.find(qn('p:txBody'))
+                if txBody is not None:
+                    for p_el in txBody.findall(qn('a:p')):
+                        for r_el in p_el.findall(qn('a:r')):
+                            p_el.remove(r_el)
+                continue
             to_remove.append(child)
     for el in to_remove:
         spTree.remove(el)
+
+
+def set_slide_title(slide, text, dark=False):
+    """Вписать заголовок слайда в штатный TITLE-placeholder шаблона.
+
+    Canonical (Problem #6, 2026-05-29): единая позиция/размер из шаблона
+    (35,38 / 963×54 / 20pt SemiBold CAPS, графит/белый). Если placeholder на
+    слайде нет — fallback на канонический textbox той же геометрии.
+    """
+    if not text:
+        return None
+    color = WHITE if dark else GRAPHITE
+    title_ph = None
+    try:
+        title_ph = slide.shapes.title
+    except Exception:
+        title_ph = None
+    if title_ph is None:
+        return _add_text_box(slide, 35, 38, 963, 54, text.upper(),
+                             font_size_pt=20, bold=True, color=color,
+                             anchor=MSO_ANCHOR.MIDDLE)
+    tf = title_ph.text_frame
+    tf.clear()
+    run = tf.paragraphs[0].add_run()
+    run.text = text.upper()
+    run.font.name = FONT_SEMIBOLD
+    run.font.size = Pt(20)
+    run.font.bold = False
+    run.font.color.rgb = color
+    return title_ph
 
 
 def render_kpi(slide, kpi_config, dark=False):
@@ -146,12 +237,10 @@ def render_kpi(slide, kpi_config, dark=False):
     if n == 0 or n > 3:
         raise ValueError(f"KPI supports 1-3 numbers, got {n}")
 
-    # Title
+    # Title — в штатный placeholder шаблона (Problem #6)
     title = kpi_config.get("title", "")
     if title:
-        _add_text_box(slide, 35, 38, 1209, 53, title,
-                      font_size_pt=20, bold=True, color=text_color,
-                      anchor=MSO_ANCHOR.MIDDLE)
+        set_slide_title(slide, title, dark=dark)
 
     # Number boxes layout
     if n == 1:
@@ -179,7 +268,10 @@ def render_kpi(slide, kpi_config, dark=False):
     for i, num in enumerate(kpi_config["numbers"]):
         x = x_positions[i]
         is_accent = num.get("accent", False)
-        color = GREEN if is_accent else text_color
+        # Canonical 2026-05-29 (Problem #2): цифра ВСЕГДА #222222 (светлый) /
+        # белая (тёмный) — НЕ зелёная. Акцент главного показателя выносится в
+        # отдельную зелёную плашку-подчёркивание под цифрой (см. ниже).
+        color = text_color
         value = num["value"]
         has_pct = num.get("pct", False)
 
@@ -199,6 +291,14 @@ def render_kpi(slide, kpi_config, dark=False):
         _add_text_box(slide, x, NUMBER_TOP, block_width, NUMBER_HEIGHT,
                       value, font_size_pt=NUMBER_FONT, bold=False, color=color,
                       align=PP_ALIGN.CENTER, anchor=MSO_ANCHOR.MIDDLE)
+
+        # Accent (Problem #2): главный показатель помечается зелёной плашкой-
+        # маркером НАД цифрой, а не зелёным цветом цифры. Геометрически безопасно
+        # (не перекрывает глиф при любом кегле 100–199pt).
+        if is_accent:
+            bar_w, bar_h = 56, 6
+            cx = x + block_width // 2
+            _add_accent_bar(slide, cx - bar_w // 2, NUMBER_TOP - 20, bar_w, bar_h)
 
         # Optional % sign — small, top-right corner of number box
         if has_pct:
@@ -220,7 +320,8 @@ def render_kpi(slide, kpi_config, dark=False):
 # Constants for blank donor selection.
 # Источник: brand/template-version.json → blank_donors (white/dark).
 # Hardcoded fallback — на случай отсутствия файла.
-_BLANK_DEFAULTS = {"white": 30, "dark": 22}
+# dark=51 (layout 'Контент / темный 1', bg #222222); было 22 (белый layout — баг).
+_BLANK_DEFAULTS = {"white": 30, "dark": 51}
 _blank_cfg = (_TPL_VER or {}).get("blank_donors", {}) if _TPL_VER else {}
 BLANK_DONOR_WHITE = int(_blank_cfg.get("white", _BLANK_DEFAULTS["white"]))
 BLANK_DONOR_DARK = int(_blank_cfg.get("dark", _BLANK_DEFAULTS["dark"]))

@@ -121,13 +121,19 @@ def _apply_series_colors(chart, accent_idx=-1):
         line.width = Emu(0)
 
 
+# Полужирное = отдельный font face (встроен в шаблон), НЕ bold-флаг.
+# Canonical 2026-05-29 (Problem #3): Bold запрещён — эмфаза только через SemiBold.
+FONT = "SB Sans Display"
+FONT_SEMIBOLD = "SB Sans Display Semibold"
+
+
 def _style_text(tf, color=GRAPHITE, size_pt=10, bold=False):
     for p in tf.paragraphs:
         for r in p.runs:
             r.font.color.rgb = color
             r.font.size = Pt(size_pt)
-            r.font.bold = bold
-            r.font.name = "SB Sans Display"
+            r.font.bold = False  # эмфаза через SemiBold-face, не bold-флаг
+            r.font.name = FONT_SEMIBOLD if bold else FONT
 
 
 def add_chart_to_slide(slide, chart_config, left, top, width, height, dark=False):
@@ -217,19 +223,16 @@ def render_chart_pptx_slide(slide, chart_config, dark=False):
       caption: подпись под chart (str, optional)
       type / x / series / accent_idx / labels / values: см. add_chart_to_slide
     """
-    from kpi_renderer import _add_text_box
+    from kpi_renderer import _add_text_box, set_slide_title
     from pptx.enum.text import PP_ALIGN, MSO_ANCHOR
     from pptx.enum.shapes import MSO_SHAPE
 
     text_color = WHITE if dark else GRAPHITE
 
+    # Title — в штатный placeholder шаблона, единый стиль (Problem #6)
     title_text = chart_config.get("title") or chart_config.get("slide_title", "")
     if title_text:
-        # Template-conformant content header: 20pt SemiBold CAPS, top-left.
-        # Параметры совпадают с заголовком в donor 21/29 (см. brand/template-canonical-rules.md).
-        _add_text_box(slide, 35, 60, 1209, 40, title_text.upper(),
-                      font_size_pt=20, bold=True, color=text_color,
-                      anchor=MSO_ANCHOR.MIDDLE)
+        set_slide_title(slide, title_text, dark=dark)
 
     ZONE_X, ZONE_Y, ZONE_W, ZONE_H = 60, 120, 1160, 480
     chart_inner_cfg = {k: v for k, v in chart_config.items()
