@@ -185,6 +185,79 @@ def _resolve_fill(fill_name):
     return GRAY, GRAPHITE
 
 
+# Маркеры для auto-detect bullets (canonical 2026-05-26, исправлено 2026-05-29):
+# Если строка начинается с одного из этих префиксов — превратить в native PP bullet.
+# Используем штатный PowerPoint «Заполненные квадратные маркеры» = шрифт Wingdings,
+# символ "§" (0xA7) → плоский залитый квадрат. Это НЕ символ ▪ U+25AA: тот в части
+# рендереров подхватывает emoji-вариант и даёт «эффект объёма». Wingdings § —
+# обычный ASCII-символ, emoji-фолбэка не бывает, всегда плоский квадрат.
+BULLET_PREFIXES = ("▪ ", "■ ", "• ", "- ", "* ")
+BULLET_FONT = "Wingdings"
+BULLET_CHAR = "§"  # § в Wingdings = заполненный квадрат (штатный PP bullet)
+BULLET_COLOR = "434343"  # графит, дефолтный цвет маркера
+BULLET_INDENT_EMU = 228600  # ~24px hanging indent для маркера
+
+
+def _detect_bullet(line):
+    """Возвращает (is_bullet, clean_text). is_bullet=True если строка
+    начинается с одного из BULLET_PREFIXES — префикс удаляется."""
+    for prefix in BULLET_PREFIXES:
+        if line.startswith(prefix):
+            return True, line[len(prefix):]
+    return False, line
+
+
+def _apply_bullet_to_paragraph(p, char=BULLET_CHAR, indent_emu=BULLET_INDENT_EMU):
+    """Добавить штатный PowerPoint bullet «Заполненный квадрат» к параграфу.
+
+    Это настоящий PP-буллет (Wingdings §, цвет #434343) — пользователь может в PP
+    кликнуть «Маркеры» → выбрать другой стиль. Без эффектов объёма: § — плоский
+    залитый квадрат, без emoji-фолбэка.
+
+    Порядок дочерних элементов pPr по схеме OOXML: buClr → buFont → buChar.
+    """
+    pPr = p._pPr
+    if pPr is None:
+        pPr = p._p.get_or_add_pPr()
+    # marL и indent — hanging indent для маркера
+    pPr.set("marL", str(indent_emu))
+    pPr.set("indent", str(-indent_emu))
+    # Удалить существующие bullet-элементы
+    for tag in ("buClr", "buSzPct", "buNone", "buChar", "buAutoNum", "buFont"):
+        for el in pPr.findall(qn(f"a:{tag}")):
+            pPr.remove(el)
+    # buClr — цвет маркера #434343 (должен идти ПЕРЕД buFont/buChar)
+    buClr = etree.SubElement(pPr, qn("a:buClr"))
+    srgb = etree.SubElement(buClr, qn("a:srgbClr"))
+    srgb.set("val", BULLET_COLOR)
+    # buFont — Wingdings (штатный набор PP filled square)
+    buFont = etree.SubElement(pPr, qn("a:buFont"))
+    buFont.set("typeface", BULLET_FONT)
+    buFont.set("pitchFamily", "2")
+    buFont.set("charset", "2")
+    # buChar — § = заполненный квадрат
+    buChar = etree.SubElement(pPr, qn("a:buChar"))
+    buChar.set("char", char)
+
+
+def _apply_no_bullet_to_paragraph(p):
+    """Явно отключить bullet — для строк без маркера в списке смешанного типа."""
+    pPr = p._pPr
+    if pPr is None:
+        pPr = p._p.get_or_add_pPr()
+    for tag in ("buClr", "buSzPct", "buChar", "buAutoNum", "buFont"):
+        for el in pPr.findall(qn(f"a:{tag}")):
+            pPr.remove(el)
+    # Удалить marL/indent — текст идёт от левого края
+    for attr in ("marL", "indent"):
+        if pPr.get(attr):
+            del pPr.attrib[attr]
+    # Явно <a:buNone/>
+    has_buNone = pPr.find(qn("a:buNone")) is not None
+    if not has_buNone:
+        etree.SubElement(pPr, qn("a:buNone"))
+
+
 def add_block(slide, x, y, w, h, lines,
               font_sizes=None, bolds=None,
               caps_first=False, fill="gray", align="left",
@@ -235,8 +308,12 @@ def add_block(slide, x, y, w, h, lines,
     for i, line in enumerate(lines):
         p = tf.paragraphs[0] if i == 0 else tf.add_paragraph()
         p.alignment = align_enum
+        # Auto-detect bullet — если строка начинается с ▪/■/•/-/* → native PP bullet
+        is_bullet, clean_line = _detect_bullet(line)
+        if is_bullet:
+            _apply_bullet_to_paragraph(p)
         run = p.add_run()
-        run.text = line.upper() if (caps_first and i == 0) else line
+        run.text = clean_line.upper() if (caps_first and i == 0) else clean_line
         run.font.name = FONT
         run.font.size = Pt(font_sizes[i] if i < len(font_sizes) else font_sizes[-1])
         run.font.bold = bolds[i] if i < len(bolds) else bolds[-1]
@@ -267,8 +344,12 @@ def add_label(slide, x, y, w, h, text,
     for i, line in enumerate(text.split("\n")):
         p = tf.paragraphs[0] if i == 0 else tf.add_paragraph()
         p.alignment = align_enum
+        # Auto-detect bullet
+        is_bullet, clean_line = _detect_bullet(line)
+        if is_bullet:
+            _apply_bullet_to_paragraph(p)
         run = p.add_run()
-        run.text = line.upper() if caps else line
+        run.text = clean_line.upper() if caps else clean_line
         run.font.name = FONT
         run.font.size = Pt(font_size)
         run.font.bold = bold

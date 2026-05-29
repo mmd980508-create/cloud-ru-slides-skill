@@ -131,6 +131,48 @@ GRAY = _from_palette("base", "Gray", "#F2F2F2")
 SEPARATOR_COLOR = RGBColor(0x43, 0x43, 0x43)
 SEPARATOR_WIDTH_PT = 1.0
 
+# Native PP bullets (canonical 2026-05-26, исправлено 2026-05-29):
+# Если строка начинается с одного из этих маркеров — штатный PP «Заполненный
+# квадрат» (Wingdings §, цвет #434343). Текст пишется БЕЗ маркера в самой строке.
+# § в Wingdings = плоский залитый квадрат, без emoji-фолбэка и «эффекта объёма».
+BULLET_PREFIXES = ("▪ ", "■ ", "• ", "- ", "* ")
+BULLET_FONT = "Wingdings"
+BULLET_CHAR = "§"
+BULLET_COLOR = "434343"
+BULLET_INDENT_EMU = 228600
+
+
+def _detect_bullet_table(line):
+    """Возвращает (is_bullet, clean_text)."""
+    for prefix in BULLET_PREFIXES:
+        if line.startswith(prefix):
+            return True, line[len(prefix):]
+    return False, line
+
+
+def _apply_bullet_to_paragraph_table(p, char=BULLET_CHAR, indent_emu=BULLET_INDENT_EMU):
+    """Добавить штатный PP bullet «Заполненный квадрат» к параграфу ячейки.
+
+    Порядок дочерних элементов pPr по схеме OOXML: buClr → buFont → buChar.
+    """
+    pPr = p._pPr
+    if pPr is None:
+        pPr = p._p.get_or_add_pPr()
+    pPr.set("marL", str(indent_emu))
+    pPr.set("indent", str(-indent_emu))
+    for tag in ("buClr", "buSzPct", "buNone", "buChar", "buAutoNum", "buFont"):
+        for el in pPr.findall(qn(f"a:{tag}")):
+            pPr.remove(el)
+    buClr = etree.SubElement(pPr, qn("a:buClr"))
+    srgb = etree.SubElement(buClr, qn("a:srgbClr"))
+    srgb.set("val", BULLET_COLOR)
+    buFont = etree.SubElement(pPr, qn("a:buFont"))
+    buFont.set("typeface", BULLET_FONT)
+    buFont.set("pitchFamily", "2")
+    buFont.set("charset", "2")
+    buChar = etree.SubElement(pPr, qn("a:buChar"))
+    buChar.set("char", char)
+
 FONT = "SB Sans Display"
 
 
@@ -205,23 +247,34 @@ def _set_cell_margins(cell, left_px=12, right_px=12, top_px=8, bottom_px=8):
 
 
 def _set_cell_text(cell, text, size_pt=11, bold=False, color_rgb=None):
-    """Записать текст в ячейку с canonical стилями (left + top, font SB Sans)."""
-    tf = cell.text_frame
-    # Убрать дефолтный пустой параграф
-    tf.clear()
-    p = tf.paragraphs[0]
-    p.alignment = PP_ALIGN.LEFT
-    # Vertical anchor top — через body properties
-    cell.vertical_anchor = MSO_ANCHOR.TOP
-    # word wrap on (default), но убедимся
-    cell.text_frame.word_wrap = True
+    """Записать текст в ячейку с canonical стилями (left + top, font SB Sans).
 
-    run = p.add_run()
-    run.text = str(text) if text is not None else ""
-    run.font.name = FONT
-    run.font.size = Pt(size_pt)
-    run.font.bold = bold
-    run.font.color.rgb = color_rgb if color_rgb is not None else GRAPHITE
+    Поддержка multi-line + native PP bullets:
+    - Если text содержит '\\n' — разбиваем на параграфы.
+    - Если строка начинается с '▪ ' / '■ ' / '• ' / '- ' / '* ' → применяем
+      native PP bullet (auto-detect). Префикс удаляется из видимого текста.
+    """
+    tf = cell.text_frame
+    tf.clear()
+    cell.vertical_anchor = MSO_ANCHOR.TOP
+    tf.word_wrap = True
+
+    text_str = str(text) if text is not None else ""
+    lines = text_str.split("\n")
+
+    for i, line in enumerate(lines):
+        p = tf.paragraphs[0] if i == 0 else tf.add_paragraph()
+        p.alignment = PP_ALIGN.LEFT
+        # Auto-detect bullet
+        is_bullet, clean_line = _detect_bullet_table(line)
+        if is_bullet:
+            _apply_bullet_to_paragraph_table(p)
+        run = p.add_run()
+        run.text = clean_line
+        run.font.name = FONT
+        run.font.size = Pt(size_pt)
+        run.font.bold = bold
+        run.font.color.rgb = color_rgb if color_rgb is not None else GRAPHITE
 
 
 def _strip_default_table_style(table):
