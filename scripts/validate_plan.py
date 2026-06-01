@@ -66,42 +66,60 @@ def validate_slide(slide_idx, slide, donors):
                 errors.append(
                     f"slide[{slide_idx}]: flow_diagram_native без blocks — схема пустая"
                 )
-            # Canonical bounds check (slide 1280×720)
-            for i, blk in enumerate(blocks):
-                x = blk.get("x", 0); y = blk.get("y", 0)
-                w = blk.get("w", 0); h = blk.get("h", 0)
-                if x < 0 or y < 0 or x + w > 1280 or y + h > 720:
-                    warnings.append(
-                        f"slide[{slide_idx}].blocks[{i}]: блок вне канваса 1280×720 "
-                        f"({x},{y},{w},{h})"
-                    )
-                if w < 60 or h < 24:
-                    warnings.append(
-                        f"slide[{slide_idx}].blocks[{i}]: блок слишком мелкий "
-                        f"(w={w}, h={h}) — текст может не уместиться"
-                    )
-                # Canonical v1.7: align=left, vanchor=top по умолчанию.
-                # Явный override на center/middle — WARN (требует обоснования).
-                blk_align = blk.get("align")
-                if blk_align in ("center", "right"):
-                    warnings.append(
-                        f"slide[{slide_idx}].blocks[{i}]: align='{blk_align}' "
-                        f"нарушает canonical (left+top). Используй только для header-плашек."
-                    )
-                blk_vanchor = blk.get("vanchor")
-                if blk_vanchor == "middle":
-                    warnings.append(
-                        f"slide[{slide_idx}].blocks[{i}]: vanchor='middle' "
-                        f"нарушает canonical (left+top). Используй только для header-плашек."
-                    )
-            # Arrows: ref-консистентность
-            block_ids = {b["id"] for b in blocks if "id" in b}
-            for i, arr in enumerate(flow.get("arrows", [])):
-                if "from" in arr or "to" in arr:
+            is_grid = bool(flow.get("grid"))
+            if is_grid:
+                # Grid-режим: блоки логические (row/col/lines), геометрию (frame-to-text
+                # + сетка) считает рендерер. Пиксельных bounds тут нет.
+                cells = set()
+                for i, blk in enumerate(blocks):
+                    if "row" not in blk or "col" not in blk:
+                        errors.append(
+                            f"slide[{slide_idx}].blocks[{i}]: grid-блок без row/col"
+                        )
+                    else:
+                        cells.add((blk["row"], blk["col"]))
+                # Arrows по [row,col]
+                for i, arr in enumerate(flow.get("arrows", [])):
                     for key in ("from", "to"):
-                        if key in arr and arr[key] not in block_ids:
+                        v = arr.get(key)
+                        if isinstance(v, (list, tuple)) and tuple(v) not in cells:
                             errors.append(
-                                f"slide[{slide_idx}].arrows[{i}]: {key}='{arr[key]}' "
+                                f"slide[{slide_idx}].arrows[{i}]: {key}={list(v)} "
+                                f"не указывает на ячейку грида"
+                            )
+            else:
+                # Явные координаты: bounds + align/vanchor.
+                for i, blk in enumerate(blocks):
+                    x = blk.get("x", 0); y = blk.get("y", 0)
+                    w = blk.get("w", 0); h = blk.get("h", 0)
+                    if x < 0 or y < 0 or x + w > 1280 or y + h > 720:
+                        warnings.append(
+                            f"slide[{slide_idx}].blocks[{i}]: блок вне канваса 1280×720 "
+                            f"({x},{y},{w},{h})"
+                        )
+                    if w < 60 or h < 24:
+                        warnings.append(
+                            f"slide[{slide_idx}].blocks[{i}]: блок слишком мелкий "
+                            f"(w={w}, h={h}) — текст может не уместиться"
+                        )
+                    blk_align = blk.get("align")
+                    if blk_align in ("center", "right"):
+                        warnings.append(
+                            f"slide[{slide_idx}].blocks[{i}]: align='{blk_align}' "
+                            f"нарушает canonical (left+top). Используй только для header-плашек."
+                        )
+                    if blk.get("vanchor") == "middle":
+                        warnings.append(
+                            f"slide[{slide_idx}].blocks[{i}]: vanchor='middle' "
+                            f"нарушает canonical (left+top). Используй только для header-плашек."
+                        )
+                block_ids = {b["id"] for b in blocks if "id" in b}
+                for i, arr in enumerate(flow.get("arrows", [])):
+                    for key in ("from", "to"):
+                        v = arr.get(key)
+                        if v is not None and not isinstance(v, (list, tuple)) and v not in block_ids:
+                            errors.append(
+                                f"slide[{slide_idx}].arrows[{i}]: {key}='{v}' "
                                 f"не соответствует ни одному block.id"
                             )
 

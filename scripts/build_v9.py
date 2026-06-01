@@ -376,6 +376,29 @@ def build(plan_path, template_path, output_path, donor_map_path):
             except Exception as e:
                 print(f"WARN: table fill failed: {e}", file=sys.stderr)
 
+    # === FINAL: canonical enforcement над ВСЕМИ слайдами (для clone-based, где
+    # native-фиксы не действуют). БЕЗОПАСНОЕ:
+    #   - цвет: зелёный/белый текст → #222222 (кроме тёмного фона) [Problem #2]
+    #   - вес: bold → SemiBold [Problem #3]
+    #   - размер <12 → 12
+    #   - заголовок контент-слайда → штатный TITLE-placeholder (35,38)/20pt
+    #     SemiBold CAPS, СЕМАНТИЧЕСКИ (Вариант A) — не «угадывая по позиции»;
+    #     титульные/divider и вертикальные/огромные заголовки не трогаются.
+    # Bump до 16pt НЕ включаем — он даёт overflow на плотных/код-боксах. ===
+    try:
+        from enforce_canonical import enforce_canonical_slide, slide_is_dark
+        enf_total = {}
+        for slide in p.slides:
+            st = enforce_canonical_slide(
+                slide, dark=slide_is_dark(slide),
+                min_pt=12, bump_from=None, bump_to=None, normalize_header=True)
+            for k, v in st.items():
+                enf_total[k] = enf_total.get(k, 0) + v
+        if any(enf_total.values()):
+            print(f"enforce_canonical: {enf_total}", file=sys.stderr)
+    except Exception as e:
+        print(f"WARN: enforce_canonical pass skipped: {e}", file=sys.stderr)
+
     p.save(output_path)
     print(f"Saved {output_path}: {len(p.slides)} slides, {pictures_inserted} pictures inserted",
           file=sys.stderr)

@@ -141,6 +141,13 @@ SEPARATOR_GRAY = RGBColor(0xCC, 0xCC, 0xCC)
 # Canonical для flow-схем (правило 2026-05-06):
 ARROW_COLOR = RGBColor(0x43, 0x43, 0x43)   # единый цвет всех стрелок
 ARROW_WIDTH_PT = 1.0                        # единая толщина всех стрелок
+# Микроправило (2026-05-29): резерв (px) под наконечник на финальном сегменте
+# ортогональной стрелки-ветки — чтобы окончание стрелки хорошо просматривалось.
+ARROW_ENTRY_RESERVE = 22
+# Зазор между колонками грида при наличии branching-стрелок — больше обычного,
+# чтобы веткам/наконечникам хватало места.
+GRID_GAP_DEFAULT = 24
+GRID_GAP_BRANCHING = 44
 
 
 FONT = "SB Sans Display"
@@ -416,6 +423,28 @@ def add_arrow(slide, x1, y1, x2, y2,
     return conn
 
 
+def add_orthogonal_arrow(slide, x1, y1, x2, y2, color=None, w_pt=None):
+    """Ортогональная стрелка-ветка (Z-маршрут) для связей между ячейками РАЗНЫХ
+    строк И колонок — вместо запрещённой диагонали (canonical: только прямые углы).
+
+    Маршрут: горизонтальный выход → вертикаль в середине зазора → горизонтальный
+    вход в цель. Голова — только на последнем сегменте (одна стрелка = одна голова).
+    """
+    if y1 == y2 or x1 == x2:
+        return add_arrow(slide, x1, y1, x2, y2, with_head=True, color=color, w_pt=w_pt)
+    # Микроправило (2026-05-29): резервируем место под наконечник на ФИНАЛЬНОМ
+    # сегменте (вход в бокс), чтобы окончание стрелки хорошо просматривалось.
+    # Вертикальную «шину» ставим ближе к источнику → вход в цель длиннее.
+    entry = ARROW_ENTRY_RESERVE
+    if x2 > x1:
+        jx = max(x1 + 8, x2 - entry)
+    else:
+        jx = min(x1 - 8, x2 + entry)
+    add_arrow(slide, x1, y1, jx, y1, with_head=False, color=color, w_pt=w_pt)
+    add_arrow(slide, jx, y1, jx, y2, with_head=False, color=color, w_pt=w_pt)
+    return add_arrow(slide, jx, y2, x2, y2, with_head=True, color=color, w_pt=w_pt)
+
+
 def add_dashed_rect(slide, x, y, w, h, color=None, w_pt=1.0):
     """Пунктирная рамка (для группировки phase-блоков)."""
     rect = slide.shapes.add_shape(MSO_SHAPE.RECTANGLE, px(x), px(y), px(w), px(h))
@@ -426,6 +455,28 @@ def add_dashed_rect(slide, x, y, w, h, color=None, w_pt=1.0):
     prstDash = etree.SubElement(ln, qn("a:prstDash"))
     prstDash.set("val", "dash")
     _no_effects(rect)
+    return rect
+
+
+def add_filled_panel(slide, x, y, w, h, label=None, dark=False, fill=None):
+    """Залитая серая панель-секция для группировки в НАГРУЖЕННЫХ схемах — вместо
+    пунктирной рамки (правило 2026-05-29: меньше пунктира, читается чище).
+
+    Рисуется ФОНОМ (до блоков). Внутри — section-title в левом-верхнем углу;
+    сами блоки внутри делать `fill="white"`, чтобы карточки выделялись на сером.
+    """
+    rgb = fill if fill is not None else GRAY
+    if isinstance(rgb, str):
+        rgb = _hex(rgb)
+    rect = slide.shapes.add_shape(MSO_SHAPE.RECTANGLE, px(x), px(y), px(w), px(h))
+    rect.fill.solid()
+    rect.fill.fore_color.rgb = rgb
+    rect.line.fill.background()
+    _no_effects(rect)
+    if label:
+        add_label(slide, x + 16, y + 12, w - 32, 22, label,
+                  font_size=13, bold=True, caps=True,
+                  color=WHITE if dark else GRAPHITE)
     return rect
 
 
@@ -606,11 +657,75 @@ def _block_anchor(block, side):
     return x + w // 2, y + h // 2
 
 
+def _wrapped_lines(text, usable_w_px, char_w_px):
+    """Сколько визуальных строк займёт логическая строка при переносе по ширине."""
+    if not text:
+        return 1
+    cpl = max(1, int(usable_w_px / char_w_px))
+    return max(1, -(-len(str(text)) // cpl))  # ceil
+
+
+def compose_grid(blocks, area, cols=None, font_pt=16, gap=24,
+                 pad=12, pad_bottom=16, v_center=True):
+    """Грид-композиция блоков схемы (frame-to-text + сетка + единый кегль).
+
+    Каждый блок задаётся ЛОГИЧЕСКИ: row, col, lines, fill — без пиксельных
+    координат. Рендерер сам считает раскладку:
+      - колонки равной ширины, единые зазоры (внутри area);
+      - высота блока = под его текст (число строк с учётом переноса × межстрочный
+        при ЕДИНОМ кегле + поля); высота строки = максимум по строке (выравнивание);
+      - все блоки одной строки имеют общий верх и высоту; одной колонки — общий
+        left/width. Кегль единый везде.
+    area=(left, top, right, bottom) в px. Мутирует блоки (x,y,w,h,font_sizes).
+    """
+    if not blocks:
+        return blocks
+    left, top, right, bottom = area
+    n_cols = cols or (max(b.get("col", 0) for b in blocks) + 1)
+    n_rows = max(b.get("row", 0) for b in blocks) + 1
+    avail_w = right - left
+    col_w = int((avail_w - (n_cols - 1) * gap) / max(1, n_cols))
+    font_px = font_pt * 4.0 / 3.0
+    char_w = 0.58 * font_px      # консервативно (чуть шире) — чтобы не переполнить
+    line_h = 1.30 * font_px
+    usable_w = max(1, col_w - 2 * pad)
+    # требуемая высота каждого блока (под текст)
+    for b in blocks:
+        lines = b.get("lines", []) or []
+        total = sum(_wrapped_lines(ln, usable_w, char_w) for ln in lines) if lines else 1
+        b["_need_h"] = int(total * line_h + pad + pad_bottom)
+    # высота строки = максимум по строке
+    row_h = [0] * n_rows
+    for b in blocks:
+        r = b.get("row", 0)
+        row_h[r] = max(row_h[r], b["_need_h"])
+    grid_h = sum(row_h) + (n_rows - 1) * gap
+    avail_h = bottom - top
+    start_y = top + (max(0, (avail_h - grid_h) // 2) if v_center else 0)
+    row_y = []
+    y = start_y
+    for r in range(n_rows):
+        row_y.append(y)
+        y += row_h[r] + gap
+    for b in blocks:
+        r = b.get("row", 0)
+        c = b.get("col", 0)
+        b["x"] = left + c * (col_w + gap)
+        b["y"] = row_y[r]
+        b["w"] = col_w
+        b["h"] = row_h[r]
+        b["font_sizes"] = [font_pt] * len(b.get("lines", []))
+    return blocks
+
+
 def render_flow_diagram_slide(slide, flow_config, dark=False):
     """Собирает flow-схему на готовом (очищенном) blank slide.
 
     Предполагается, что slide уже прошёл clean_slide_to_blank() — этим
     занимается build_v9 до вызова render_flow_diagram_slide.
+
+    Режим grid (flow_config["grid"]=true): блоки задаются логически (row/col/lines),
+    рендерер считает раскладку через compose_grid — frame-to-text + сетка + единый кегль.
     """
     if not isinstance(flow_config, dict):
         raise ValueError("flow_config должен быть dict")
@@ -634,8 +749,36 @@ def render_flow_diagram_slide(slide, flow_config, dark=False):
                   color=DASH_GRAY)
 
     # 2. Blocks — собираем по id для arrow refs
+    blocks = flow_config.get("blocks", [])
+    # Grid-режим: считаем раскладку (frame-to-text + сетка + единый кегль).
+    if flow_config.get("grid"):
+        grid_top = 170 if (subtitle or subtitle_url) else 150
+        # Микроправило: если есть branching-стрелки (ветка между разными строкой И
+        # колонкой) — зазор колонок больше, чтобы веткам/наконечникам хватало места.
+        def _is_branch(a):
+            f, t = a.get("from"), a.get("to")
+            return (isinstance(f, (list, tuple)) and isinstance(t, (list, tuple))
+                    and f[0] != t[0] and f[1] != t[1])
+        has_branch = any(_is_branch(a) for a in flow_config.get("arrows", []))
+        default_gap = GRID_GAP_BRANCHING if has_branch else GRID_GAP_DEFAULT
+        compose_grid(
+            blocks, (SAFE_LEFT, grid_top, SAFE_RIGHT, SAFE_BOTTOM),
+            cols=flow_config.get("cols"),
+            font_pt=flow_config.get("font_size", 16),
+            gap=flow_config.get("gap", default_gap),
+        )
+        for b in blocks:
+            if "id" not in b and "row" in b and "col" in b:
+                b["id"] = "%s,%s" % (b["row"], b["col"])
+
+    # 1d. Залитые панели-секции (style="panel") — ФОНОМ, до блоков (нагруженные схемы).
+    for grp in flow_config.get("groups", []):
+        if grp.get("style") == "panel":
+            add_filled_panel(slide, grp["x"], grp["y"], grp["w"], grp["h"],
+                             label=grp.get("label"), dark=dark, fill=grp.get("fill"))
+
     blocks_by_id = {}
-    for blk in flow_config.get("blocks", []):
+    for blk in blocks:
         # Canonical default: align=left, vanchor=top (правило 2026-05-06).
         shape = add_block(
             slide,
@@ -651,8 +794,10 @@ def render_flow_diagram_slide(slide, flow_config, dark=False):
         if "id" in blk:
             blocks_by_id[blk["id"]] = blk
 
-    # 3. Groups — dashed рамка + label
+    # 3. Groups — пунктирная рамка + label (style="panel" уже нарисованы фоном).
     for grp in flow_config.get("groups", []):
+        if grp.get("style") == "panel":
+            continue
         gx, gy, gw, gh = grp["x"], grp["y"], grp["w"], grp["h"]
         add_dashed_rect(slide, gx, gy, gw, gh)
         label_text = grp.get("label")
@@ -665,11 +810,25 @@ def render_flow_diagram_slide(slide, flow_config, dark=False):
     # 4. Arrows
     for arr in flow_config.get("arrows", []):
         if "from" in arr and "to" in arr:
-            src = blocks_by_id.get(arr["from"])
-            dst = blocks_by_id.get(arr["to"])
+            fr, to = arr["from"], arr["to"]
+            if isinstance(fr, (list, tuple)):
+                fr = "%s,%s" % (fr[0], fr[1])   # ссылка на ячейку [row,col]
+            if isinstance(to, (list, tuple)):
+                to = "%s,%s" % (to[0], to[1])
+            src = blocks_by_id.get(fr)
+            dst = blocks_by_id.get(to)
             if src is None or dst is None:
                 continue
-            side = arr.get("side", "right")
+            # Авто-определение стороны выхода стрелки по позициям ячеек грида
+            # (чтобы вертикальные связи не рисовались как горизонтальные и не «пропадали»).
+            side = arr.get("side")
+            if side is None and "row" in src and "row" in dst:
+                if src["row"] == dst["row"]:
+                    side = "right" if dst["col"] >= src["col"] else "left"
+                elif src["col"] == dst["col"]:
+                    side = "bottom" if dst["row"] >= src["row"] else "top"
+            if side is None:
+                side = "right"
             x1, y1 = _block_anchor(src, side)
             # По умолчанию входим в противоположную сторону
             opposite = {"right": "left", "left": "right",
@@ -678,13 +837,17 @@ def render_flow_diagram_slide(slide, flow_config, dark=False):
         else:
             x1, y1 = arr["x1"], arr["y1"]
             x2, y2 = arr["x2"], arr["y2"]
-        # w_pt=None → используем ARROW_WIDTH_PT (canonical единая толщина).
-        add_arrow(
-            slide, x1, y1, x2, y2,
-            with_head=arr.get("with_head", True),
-            w_pt=arr.get("w_pt"),
-            dashed=arr.get("dashed", False),
-        )
+        # Диагональ (ветка между разными строкой И колонкой) → ортогональный
+        # Z-маршрут вместо запрещённой диагонали. Иначе — прямая.
+        if x1 != x2 and y1 != y2:
+            add_orthogonal_arrow(slide, x1, y1, x2, y2, w_pt=arr.get("w_pt"))
+        else:
+            add_arrow(
+                slide, x1, y1, x2, y2,
+                with_head=arr.get("with_head", True),
+                w_pt=arr.get("w_pt"),
+                dashed=arr.get("dashed", False),
+            )
 
     # 5. Labels (произвольные)
     for lab in flow_config.get("labels", []):
