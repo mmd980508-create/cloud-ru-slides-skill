@@ -71,6 +71,7 @@ import json
 from pptx.util import Pt, Emu
 from pptx.dml.color import RGBColor
 from pptx.enum.text import PP_ALIGN, MSO_ANCHOR
+from pptx.enum.shapes import MSO_SHAPE
 from pptx.oxml.ns import qn
 from lxml import etree
 
@@ -82,9 +83,9 @@ SLIDE_H_PX = 720
 # Safe-area (canonical v1.7+, та же что в flow_renderer)
 SAFE_TOP = 140
 SAFE_BOTTOM = 660
-SAFE_LEFT = 30
-SAFE_RIGHT = 1250
-SAFE_W = SAFE_RIGHT - SAFE_LEFT     # 1220
+SAFE_LEFT = 35
+SAFE_RIGHT = 1245
+SAFE_W = SAFE_RIGHT - SAFE_LEFT     # 1210
 SAFE_H = SAFE_BOTTOM - SAFE_TOP     # 520
 
 
@@ -124,6 +125,8 @@ def _from_palette(section, name, fallback):
 GRAPHITE = _from_palette("base", "Black", "#222222")
 WHITE = _from_palette("base", "White", "#FFFFFF")
 GRAY = _from_palette("base", "Gray", "#F2F2F2")
+GREEN = _from_palette("base", "Green", "#26D07C")
+DARK_FILL = GRAPHITE
 
 # Canonical (правило 2026-05-26): vertical separators между колонками таблицы =
 # 1pt #434343. Никаких внешних границ и горизонтальных линий — зебра-фон сам
@@ -401,6 +404,161 @@ def _add_subtitle(slide, text, dark=False):
 
 
 # ============================================================================
+# Пресет before/after (архетип 8) — рисуется из плашек, не из PPT-таблицы
+# ============================================================================
+def _ba_rect(slide, x, y, w, h, fill_rgb):
+    rect = slide.shapes.add_shape(MSO_SHAPE.RECTANGLE,
+                                  Emu(int(x) * EMU), Emu(int(y) * EMU),
+                                  Emu(int(w) * EMU), Emu(int(h) * EMU))
+    rect.fill.solid()
+    rect.fill.fore_color.rgb = fill_rgb
+    rect.line.fill.background()
+    spPr = rect._element.spPr
+    for tag in ("effectLst", "effectDag"):
+        for e in spPr.findall(qn(f"a:{tag}")):
+            spPr.remove(e)
+    return rect
+
+
+def _ba_text(slide, x, y, w, h, text, size_pt, bold,
+             color_rgb, align="left", anchor="middle"):
+    box = slide.shapes.add_textbox(
+        Emu(int(x) * EMU), Emu(int(y) * EMU),
+        Emu(int(w) * EMU), Emu(int(h) * EMU))
+    tf = box.text_frame
+    tf.word_wrap = True
+    tf.vertical_anchor = MSO_ANCHOR.MIDDLE if anchor == "middle" else MSO_ANCHOR.TOP
+    tf.margin_left = Emu(0)
+    tf.margin_right = Emu(0)
+    tf.margin_top = Emu(0)
+    tf.margin_bottom = Emu(0)
+    align_enum = {"left": PP_ALIGN.LEFT, "center": PP_ALIGN.CENTER,
+                  "right": PP_ALIGN.RIGHT}.get(align, PP_ALIGN.LEFT)
+    for i, line in enumerate(str(text).split("\n")):
+        p = tf.paragraphs[0] if i == 0 else tf.add_paragraph()
+        p.alignment = align_enum
+        run = p.add_run()
+        run.text = line
+        run.font.size = Pt(size_pt)
+        _set_weight(run.font, bold)
+        run.font.color.rgb = color_rgb
+    return box
+
+
+def _ba_multitext(slide, x, y, w, h, parts, align="left", anchor="middle"):
+    """Текстбокс с несколькими абзацами, у каждого свой (size, bold, color).
+    parts: [(text, size_pt, bold, color_rgb), ...]. Для двухстрочной метрики
+    (название SemiBold + деталь regular серым)."""
+    box = slide.shapes.add_textbox(
+        Emu(int(x) * EMU), Emu(int(y) * EMU),
+        Emu(int(w) * EMU), Emu(int(h) * EMU))
+    tf = box.text_frame
+    tf.word_wrap = True
+    tf.vertical_anchor = MSO_ANCHOR.MIDDLE if anchor == "middle" else MSO_ANCHOR.TOP
+    tf.margin_left = Emu(0); tf.margin_right = Emu(0)
+    tf.margin_top = Emu(0); tf.margin_bottom = Emu(0)
+    align_enum = {"left": PP_ALIGN.LEFT, "center": PP_ALIGN.CENTER,
+                  "right": PP_ALIGN.RIGHT}.get(align, PP_ALIGN.LEFT)
+    for i, (text, size_pt, bold, color_rgb) in enumerate(parts):
+        p = tf.paragraphs[0] if i == 0 else tf.add_paragraph()
+        p.alignment = align_enum
+        run = p.add_run()
+        run.text = str(text)
+        run.font.size = Pt(size_pt)
+        _set_weight(run.font, bold)
+        run.font.color.rgb = color_rgb
+    return box
+
+
+def render_before_after(slide, cfg, dark=False):
+    """Архетип 8 — before/after. Сверено по референсу 2026-06-01 (EVOLUTION ML
+    INFERENCE VS ON-PREM): три колонки — метрика | «Было» | «Стало». Заголовки-
+    табы ЦВЕТНЫЕ (серый / зелёный) с текстом ПО ЛЕВОМУ краю, на всю ширину колонки.
+    Тело — без сплошных плашек; лёгкая серая подложка под колонкой «Было», тонкие
+    серые разделители строк через все колонки. Метрика — двухстрочная (название
+    SemiBold графит + деталь regular серым, через "\\n").
+
+    cfg["rows"]: [{"metric","before","after"}], cfg["before_label"]/["after_label"],
+    cfg["metric_label"] (заголовок колонки метрик, опц.).
+    """
+    rows = cfg.get("rows", [])
+    n = len(rows)
+    if n == 0:
+        return
+    before_label = cfg.get("before_label", "Было")
+    after_label = cfg.get("after_label", "Стало")
+    metric_label = cfg.get("metric_label", "")
+
+    top = cfg.get("content_top", SAFE_TOP + 6)
+    tab_h = cfg.get("tab_h", 44)
+    body_top = top + tab_h + 10
+    body_bottom = SAFE_BOTTOM
+    body_h = body_bottom - body_top
+
+    label_w = int(SAFE_W * cfg.get("label_ratio", 0.30))
+    col_gap = cfg.get("col_gap", 4)           # ≤10px, базово 4px (правило 2026-06-01)
+    rest = SAFE_W - label_w - col_gap
+    before_w = rest // 2
+    after_w = rest - before_w
+    before_x = SAFE_LEFT + label_w
+    after_x = before_x + before_w + col_gap
+
+    gray = DARK_FILL if dark else GRAY
+    base_txt = WHITE if dark else GRAPHITE
+    body_gray = RGBColor(0xCF, 0xCF, 0xCF) if dark else RGBColor(0x5C, 0x5C, 0x5C)
+    divider = RGBColor(0x44, 0x44, 0x44) if dark else RGBColor(0xCC, 0xCC, 0xCC)
+    faint = RGBColor(0x2A, 0x2A, 0x2A) if dark else RGBColor(0xF7, 0xF7, 0xF7)
+    pad = 14
+
+    # Лёгкая подложка под колонкой «Было» (едва заметная — выделяет столбец).
+    _ba_rect(slide, before_x, body_top, before_w, body_h, faint)
+
+    # Заголовки-табы — цветные, текст ПО ЛЕВОМУ краю, во всю ширину колонки.
+    if metric_label:
+        _ba_text(slide, SAFE_LEFT, top, label_w - pad, tab_h, metric_label,
+                 cfg.get("tab_font", 16), True, base_txt, align="left")
+    _ba_rect(slide, before_x, top, before_w, tab_h, gray)
+    _ba_rect(slide, after_x, top, after_w, tab_h, GREEN)
+    _ba_text(slide, before_x + pad, top, before_w - 2 * pad, tab_h, before_label,
+             cfg.get("tab_font", 16), True, base_txt, align="left")
+    _ba_text(slide, after_x + pad, top, after_w - 2 * pad, tab_h, after_label,
+             cfg.get("tab_font", 16), True, GRAPHITE, align="left")
+
+    # Строки.
+    band_h = body_h / n
+    metric_size = cfg.get("metric_size", 16)
+    before_size = cfg.get("before_size", 15)
+    after_size = cfg.get("after_size", 15)
+    from pptx.enum.shapes import MSO_CONNECTOR
+    for i, row in enumerate(rows):
+        y = body_top + i * band_h
+        # Тонкий серый разделитель сверху строки (кроме первой), через все колонки.
+        if i > 0:
+            conn = slide.shapes.add_connector(
+                MSO_CONNECTOR.STRAIGHT,
+                Emu(int(SAFE_LEFT) * EMU), Emu(int(y) * EMU),
+                Emu(int(after_x + after_w) * EMU), Emu(int(y) * EMU))
+            conn.line.color.rgb = divider
+            conn.line.width = Emu(int(0.75 * 12700))
+        # Метрика — двухстрочная: название SemiBold + деталь regular серым.
+        metric = str(row.get("metric", ""))
+        mparts = metric.split("\n", 1)
+        parts = [(mparts[0], metric_size, True, base_txt)]
+        if len(mparts) > 1:
+            parts.append((mparts[1], metric_size - 2, False, body_gray))
+        _ba_multitext(slide, SAFE_LEFT, y, label_w - pad, band_h, parts,
+                      align="left", anchor="middle")
+        # «Было» — серым regular.
+        _ba_text(slide, before_x + pad, y, before_w - 2 * pad, band_h,
+                 row.get("before", ""), before_size, False, body_gray,
+                 align="left")
+        # «Стало» — графит regular (читается как «после»).
+        _ba_text(slide, after_x + pad, y, after_w - 2 * pad, band_h,
+                 row.get("after", ""), after_size, False, base_txt,
+                 align="left")
+
+
+# ============================================================================
 # Главная функция
 # ============================================================================
 def render_table_native(slide, table_config, dark=False):
@@ -410,6 +568,23 @@ def render_table_native(slide, table_config, dark=False):
     """
     if not isinstance(table_config, dict):
         raise ValueError("table_config должен быть dict")
+
+    # Preset-архетип before/after (design-principles-from-decks.md, архетип 8).
+    # Это НЕ обычная zebra-таблица — рисуется отдельной композицией из плашек.
+    if table_config.get("preset") == "before_after":
+        header_text = table_config.get("header", "")
+        if header_text:
+            _add_slide_header(slide, header_text, dark=dark)
+            if table_config.get("top_separator"):
+                _add_top_separator(slide)
+        subtitle = table_config.get("subtitle")
+        if subtitle:
+            _add_subtitle(slide, subtitle, dark=dark)
+        # Отступ тела под подзаголовок (правило 2026-06-01).
+        if "content_top" not in table_config:
+            table_config["content_top"] = 172 if subtitle else SAFE_TOP + 6
+        render_before_after(slide, table_config, dark=dark)
+        return
 
     headers = table_config.get("headers", [])
     data = table_config.get("data", [])
@@ -434,7 +609,9 @@ def render_table_native(slide, table_config, dark=False):
     header_text = table_config.get("header", "")
     if header_text:
         _add_slide_header(slide, header_text, dark=dark)
-        _add_top_separator(slide)
+        # Дивайдер под заголовком — только по явному флагу (правило 2026-06-01).
+        if table_config.get("top_separator"):
+            _add_top_separator(slide)
 
     subtitle = table_config.get("subtitle")
     if subtitle:

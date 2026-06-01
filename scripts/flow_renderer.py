@@ -23,8 +23,9 @@ flow_renderer.py — native PowerPoint flow-diagrams / schemas / process maps.
   - Пунктирные рамки для группировки фаз: 1pt #888888 dash.
   - Заголовок: 20pt SemiBold CAPS, top-left (35, 60).
   - Decor (по бренду): зелёные стрелки ↗ (нативные фигуры-группы, 1pt) — bottom corner.
-  - Safe-area: SAFE_TOP=140, SAFE_BOTTOM=660, SAFE_LEFT=30, SAFE_RIGHT=1250.
-    Все координаты блоков должны лежать внутри safe-area.
+  - Safe-area: SAFE_TOP=140, SAFE_BOTTOM=660, SAFE_LEFT=35, SAFE_RIGHT=1245
+    (совпадает с направляющими PowerPoint и TITLE-placeholder @35 — заголовок и
+    фреймы выровнены по ОДНИМ границам). Все координаты блоков лежат внутри.
 
 Координаты — в пикселях (slide 1280×720). EMU = px × 9525.
 
@@ -137,6 +138,9 @@ GREEN = _from_palette("base", "Green", "#26D07C")
 DARK_FILL = GRAPHITE
 DASH_GRAY = RGBColor(0x88, 0x88, 0x88)
 SEPARATOR_GRAY = RGBColor(0xCC, 0xCC, 0xCC)
+# Тело текста в эталонных деках — средний серый (заголовок графит, тело светлее).
+# 3-уровневая иерархия (правило A-6). Сверено по референсам 2026-06-01.
+TEXT_GRAY = RGBColor(0x5C, 0x5C, 0x5C)
 
 # Canonical для flow-схем (правило 2026-05-06):
 ARROW_COLOR = RGBColor(0x43, 0x43, 0x43)   # единый цвет всех стрелок
@@ -148,6 +152,9 @@ ARROW_ENTRY_RESERVE = 22
 # чтобы веткам/наконечникам хватало места.
 GRID_GAP_DEFAULT = 24
 GRID_GAP_BRANCHING = 44
+# Базовый отступ МЕЖДУ фреймами в пресетах-архетипах (правило 2026-06-01):
+# не более 10px, базово 4px — как в эталонных деках (плотный ритм).
+PRESET_GAP = 4
 
 
 FONT = "SB Sans Display"
@@ -169,11 +176,13 @@ def _set_weight(font, semibold):
 
 # Safe-area для 1280×720 Cloud.ru slide.
 # Все координаты flow-схем должны рассчитываться относительно этих констант.
-SAFE_TOP = 140       # под заголовком 20pt + разделителем
+SAFE_TOP = 140       # под заголовком 20pt
 SAFE_BOTTOM = 660    # выше footer copyright
-SAFE_LEFT = 30
-SAFE_RIGHT = 1250
-SAFE_W = SAFE_RIGHT - SAFE_LEFT   # 1220
+# SAFE_LEFT/RIGHT = направляющие PowerPoint + левый край TITLE-placeholder (@35).
+# Раньше было 30/1250 — фреймы выходили за поля и не совпадали с заголовком.
+SAFE_LEFT = 35
+SAFE_RIGHT = 1245
+SAFE_W = SAFE_RIGHT - SAFE_LEFT   # 1210
 SAFE_H = SAFE_BOTTOM - SAFE_TOP    # 520
 
 
@@ -288,7 +297,7 @@ def add_block(slide, x, y, w, h, lines,
               font_sizes=None, bolds=None,
               caps_first=False, fill="gray", align="left",
               vanchor="top",
-              text_color=None):
+              text_color=None, text_colors=None):
     """Прямоугольник с многострочным контентом.
 
     Canonical (правило 2026-05-06):
@@ -303,6 +312,8 @@ def add_block(slide, x, y, w, h, lines,
     align: "left" (default, canonical) / "center" / "right".
     vanchor: "top" (default, canonical) / "middle".
     text_color: явный override (RGBColor); иначе из fill.
+    text_colors: список цветов по строкам (3-уровневая иерархия — заголовок графит,
+        тело TEXT_GRAY). Имеет приоритет над text_color для соответствующей строки.
     """
     rgb_fill, default_text = _resolve_fill(fill)
     text = text_color if text_color is not None else default_text
@@ -345,7 +356,10 @@ def add_block(slide, x, y, w, h, lines,
         run.text = clean_line.upper() if (caps_first and i == 0) else clean_line
         run.font.size = Pt(font_sizes[i] if i < len(font_sizes) else font_sizes[-1])
         _set_weight(run.font, bolds[i] if i < len(bolds) else bolds[-1])
-        run.font.color.rgb = text
+        if text_colors is not None and i < len(text_colors) and text_colors[i] is not None:
+            run.font.color.rgb = text_colors[i]
+        else:
+            run.font.color.rgb = text
     return shape
 
 
@@ -458,6 +472,27 @@ def add_dashed_rect(slide, x, y, w, h, color=None, w_pt=1.0):
     return rect
 
 
+def snap_panel_to_safe(x, y, w, h, tol=24):
+    """Притягивает края панели к направляющим safe-area, если они РЯДОМ (в пределах
+    tol px). Чинит два дефекта hand-coded панелей: (1) выход за поля и (2) пустой
+    зазор справа («фреймы не доведены до конца»). Не трогает края, которые явно
+    внутри (намеренный отступ) — двигаем только то, что метило в границу.
+
+    Возвращает (x, y, w, h). Координаты — px.
+    """
+    left, right = x, x + w
+    top, bottom = y, y + h
+    if abs(left - SAFE_LEFT) <= tol:
+        left = SAFE_LEFT
+    if abs(right - SAFE_RIGHT) <= tol:
+        right = SAFE_RIGHT
+    if abs(top - SAFE_TOP) <= tol:
+        top = SAFE_TOP
+    if abs(bottom - SAFE_BOTTOM) <= tol:
+        bottom = SAFE_BOTTOM
+    return left, top, right - left, bottom - top
+
+
 def add_filled_panel(slide, x, y, w, h, label=None, dark=False, fill=None):
     """Залитая серая панель-секция для группировки в НАГРУЖЕННЫХ схемах — вместо
     пунктирной рамки (правило 2026-05-29: меньше пунктира, читается чище).
@@ -478,6 +513,75 @@ def add_filled_panel(slide, x, y, w, h, label=None, dark=False, fill=None):
                   font_size=13, bold=True, caps=True,
                   color=WHITE if dark else GRAPHITE)
     return rect
+
+
+def _draw_check(slide, x, y, size, color=None, w_pt=2.0):
+    """Иконка-галочка как в эталоне (Чек-лист успеха): КОНТУРНЫЙ КРУЖОК + галочка
+    внутри. Кружок — обводка цветом col без заливки, галочка — две линии-сегмента
+    со скруглёнными концами. Всё нативные фигуры (редактируемые). Сверено по
+    референсу 2026-06-01: иконка графит на зелёном чипе, не сплошной глиф.
+    Координаты — относительно бокса (x,y,size)."""
+    col = color if color is not None else GRAPHITE
+    # Кружок-обводка занимает ~76% бокса, центрирован.
+    d = size * 0.76
+    cx = x + (size - d) / 2.0
+    cy = y + (size - d) / 2.0
+    ring = slide.shapes.add_shape(MSO_SHAPE.OVAL, px(cx), px(cy), px(d), px(d))
+    ring.fill.background()
+    ring.line.color.rgb = col
+    ring.line.width = Emu(int(w_pt * 12700))
+    _no_effects(ring)
+    # Галочка ✓ внутри кружка (координаты относительно всего бокса).
+    pts_rel = [(0.33, 0.52), (0.45, 0.64), (0.68, 0.38)]
+    abspts = [(x + rx * size, y + ry * size) for rx, ry in pts_rel]
+    for (x1, y1), (x2, y2) in zip(abspts, abspts[1:]):
+        conn = slide.shapes.add_connector(
+            MSO_CONNECTOR.STRAIGHT, px(x1), px(y1), px(x2), px(y2))
+        conn.line.color.rgb = col
+        conn.line.width = Emu(int(w_pt * 12700))
+        ln = conn.line._get_or_add_ln()
+        ln.set("cap", "rnd")
+
+
+def add_green_chip(slide, x, y, size=50, number=None, check=False,
+                   font_size=22, fill=None, text_color=None, bold=False):
+    """Фирменный зелёный квадрат-чип ~50×50px — повторяющийся мотив Cloud.ru
+    (design-principles-from-decks.md, правило A-10).
+
+    Внутри по центру — цифра (01–05) ИЛИ контурная галочка. Ставится слева от
+    заголовка / строки / карточки. Дозированный зелёный акцент.
+
+    ВАЖНО (canonical): контент на зелёном — ГРАФИТ #222222, НЕ белый (white-on-green
+    запрещён). Цифры — REGULAR-начертанием (не bold), как в эталоне.
+
+    number: строка/число ("01" или 1). check=True → контурная галочка вместо цифры.
+    """
+    col = text_color if text_color is not None else GRAPHITE
+    chip = slide.shapes.add_shape(MSO_SHAPE.RECTANGLE,
+                                  px(x), px(y), px(size), px(size))
+    chip.fill.solid()
+    chip.fill.fore_color.rgb = fill if fill is not None else GREEN
+    chip.line.fill.background()
+    _no_effects(chip)
+    if check:
+        _draw_check(slide, x, y, size, color=col)
+        return chip
+    tf = chip.text_frame
+    tf.word_wrap = False
+    tf.vertical_anchor = MSO_ANCHOR.MIDDLE
+    tf.margin_left = Emu(0)
+    tf.margin_right = Emu(0)
+    tf.margin_top = Emu(0)
+    tf.margin_bottom = Emu(0)
+    p = tf.paragraphs[0]
+    p.alignment = PP_ALIGN.CENTER
+    run = p.add_run()
+    if number is not None:
+        run.text = str(number)
+    run.font.size = Pt(font_size)
+    _set_weight(run.font, bold)
+    run.font.color.rgb = col
+    return chip
 
 
 def add_header(slide, text, dark=False):
@@ -718,6 +822,295 @@ def compose_grid(blocks, area, cols=None, font_pt=16, gap=24,
     return blocks
 
 
+# ============================================================================
+# Пресеты дизайн-архетипов (design-principles-from-decks.md, раздел B).
+# Каждый — самодостаточная композиция тела слайда внутри safe-area.
+# Заголовок/subtitle рисует render_flow_diagram_slide ДО вызова пресета.
+# ============================================================================
+def _panel_rect(slide, x, y, w, h, dark=False, fill=None):
+    """Простой залитый прямоугольник-фон (карточка/лента) без текста."""
+    rect = slide.shapes.add_shape(MSO_SHAPE.RECTANGLE, px(x), px(y), px(w), px(h))
+    rect.fill.solid()
+    if fill is not None:
+        rect.fill.fore_color.rgb = fill if not isinstance(fill, str) else _hex(fill)
+    else:
+        rect.fill.fore_color.rgb = DARK_FILL if dark else GRAY
+    rect.line.fill.background()
+    _no_effects(rect)
+    return rect
+
+
+def render_numbered_rows(slide, cfg, dark=False):
+    """Архетип 5B — нумерованные строки. Сверено по референсу 2026-06-01
+    (ПОЧЕМУ CLOUD.RU ЛУЧШЕ): чистый стиль — номер «01» графитом REGULAR + заголовок
+    SemiBold графит в ОДНУ строку, тело TEXT_GRAY ниже. Без серых лент и зелёных
+    чипов. Раскладка в N колонок (по умолчанию 1; 6–8 пунктов → 2 колонки).
+
+    cfg["rows"]: [{"title","text"?,"number"?}], cfg["cols"] (default 1).
+    cfg["style"]="band" → старый вариант: серые ленты во всю ширину + зелёный
+        чип-номер слева (для коротких списков-чеклистов).
+    """
+    rows = cfg.get("rows", [])
+    n = len(rows)
+    if n == 0:
+        return
+    top = cfg.get("content_top", SAFE_TOP)
+    avail = SAFE_BOTTOM - top
+    title_col = WHITE if dark else GRAPHITE
+    body_col = RGBColor(0xCF, 0xCF, 0xCF) if dark else TEXT_GRAY
+
+    if cfg.get("style") == "band":
+        gap = cfg.get("gap", PRESET_GAP)
+        band_h = int((avail - (n - 1) * gap) / n)
+        chip = min(cfg.get("chip_size", 54), band_h - 20)
+        chip_x = SAFE_LEFT + cfg.get("chip_inset", 20)
+        for i, row in enumerate(rows):
+            y = top + i * (band_h + gap)
+            _panel_rect(slide, SAFE_LEFT, y, SAFE_W, band_h, dark=dark)
+            chip_y = y + (band_h - chip) // 2
+            add_green_chip(slide, chip_x, chip_y, size=chip,
+                           number=row.get("number", "%02d" % (i + 1)),
+                           font_size=cfg.get("chip_font", 22))
+            tx = chip_x + chip + cfg.get("chip_text_gap", 20)
+            tw = SAFE_RIGHT - tx - 16
+            title = row.get("title", "")
+            text = row.get("text", "")
+            lines = [l for l in (title, text) if l]
+            sizes, bolds, cols_c = [], [], []
+            if title:
+                sizes.append(cfg.get("title_size", 24)); bolds.append(True)
+                cols_c.append(title_col)
+            if text:
+                sizes.append(cfg.get("text_size", 16)); bolds.append(False)
+                cols_c.append(body_col)
+            add_block(slide, tx, y, tw, band_h, lines,
+                      font_sizes=sizes, bolds=bolds,
+                      fill=("dark" if dark else "gray"),
+                      vanchor="middle", text_colors=cols_c)
+        return
+
+    # Чистый стиль (default) — текст с графитовым номером, без плашек.
+    cols = cfg.get("cols", 1)
+    per_col = -(-n // cols)
+    col_gap = cfg.get("col_gap", 44)
+    cw = int((SAFE_W - (cols - 1) * col_gap) / cols)
+    slot_h = int(avail / per_col)
+    num_w = cfg.get("number_w", 44)
+    num_size = cfg.get("number_size", 17)
+    title_size = cfg.get("title_size", 17)
+    text_size = cfg.get("text_size", 14)
+    for i, row in enumerate(rows):
+        col = i // per_col
+        rr = i % per_col
+        x = SAFE_LEFT + col * (cw + col_gap)
+        y = top + rr * slot_h
+        title = row.get("title", "")
+        text = row.get("text", "")
+        number = str(row.get("number", "%02d" % (i + 1)))
+        # Номер графитом REGULAR.
+        add_label(slide, x, y, num_w, slot_h, number,
+                  font_size=num_size, bold=False, anchor="top", color=title_col)
+        tx = x + num_w
+        tw = cw - num_w
+        if title:
+            add_label(slide, tx, y, tw, int(1.4 * title_size * 4 / 3), title,
+                      font_size=title_size, bold=True, anchor="top", color=title_col)
+        if text:
+            ty = y + int(1.5 * title_size * 4 / 3)
+            add_label(slide, tx, ty, tw, slot_h - (ty - y), text,
+                      font_size=text_size, bold=False, anchor="top", color=body_col)
+
+
+def render_card_grid(slide, cfg, dark=False):
+    """Архетип 4 — сетка карточек: карточки в сетке cols×rows, заголовок (SemiBold,
+    графит) + тело (TEXT_GRAY). Сверено по референсам 2026-06-01 (Evolution AI
+    Factory, AI Workflows): 3-уровневая иерархия — заголовок графит, тело серое.
+
+    Чип-номер/галочка ОПЦИОНАЛЕН (card["check"] или card["number"]): тогда чип
+    слева, заголовок В ТУ ЖЕ СТРОКУ справа от чипа, тело — ниже под заголовком.
+    Без чипа — заголовок сверху, тело под ним (как в большинстве эталонных карточек).
+
+    cfg["cards"]: [{"title","text","check"?,"number"?}], cfg["cols"] (default 2).
+    """
+    cards = cfg.get("cards", [])
+    n = len(cards)
+    if n == 0:
+        return
+    cols = cfg.get("cols", 2)
+    n_rows = -(-n // cols)
+    gap = cfg.get("gap", PRESET_GAP)          # ≤10px, базово 4px
+    top = cfg.get("content_top", SAFE_TOP)
+    avail_h = SAFE_BOTTOM - top
+    cw = int((SAFE_W - (cols - 1) * gap) / cols)
+    ch = int((avail_h - (n_rows - 1) * gap) / n_rows)
+    pad = cfg.get("pad", 22)
+    chip = cfg.get("chip_size", 44)
+    title_size = cfg.get("title_size", 20)
+    text_size = cfg.get("text_size", 15)
+    title_col = WHITE if dark else GRAPHITE
+    # На тёмной плашке тело — светло-серое; на светлой — TEXT_GRAY.
+    body_col = RGBColor(0xCF, 0xCF, 0xCF) if dark else TEXT_GRAY
+    transparent = cfg.get("transparent", False)   # карточки без заливки (как 17.24.38)
+    for i, card in enumerate(cards):
+        r, c = i // cols, i % cols
+        x = SAFE_LEFT + c * (cw + gap)
+        y = top + r * (ch + gap)
+        if not transparent:
+            _panel_rect(slide, x, y, cw, ch, dark=dark)
+        title = card.get("title", "")
+        text = card.get("text", "")
+        num = card.get("number")
+        has_check = bool(card.get("check", False))
+        has_chip = has_check or (num is not None)
+        if has_chip:
+            use_check = has_check or num is None
+            add_green_chip(slide, x + pad, y + pad, size=chip,
+                           number=(None if use_check else num),
+                           check=use_check,
+                           font_size=cfg.get("chip_font", 18))
+            tx = x + pad + chip + 14
+            tw = cw - (tx - x) - pad
+            # Заголовок в строку с чипом — по центру высоты чипа.
+            if title:
+                add_label(slide, tx, y + pad, tw, chip, title,
+                          font_size=title_size, bold=True,
+                          anchor="middle", color=title_col)
+            body_y = y + pad + chip + 12
+            body_x, body_w = tx, tw
+        else:
+            tx = x + pad
+            tw = cw - 2 * pad
+            # высота заголовка под число строк (single/two-line)
+            t_lines = _wrapped_lines(title, tw, 0.58 * title_size * 4.0 / 3.0)
+            t_h = int(t_lines * 1.25 * title_size * 4.0 / 3.0) + 4
+            if title:
+                add_label(slide, tx, y + pad, tw, t_h, title,
+                          font_size=title_size, bold=True,
+                          anchor="top", color=title_col)
+            body_y = y + pad + t_h + 6
+            body_x, body_w = tx, tw
+        if text:
+            add_label(slide, body_x, body_y, body_w,
+                      y + ch - body_y - pad, text,
+                      font_size=text_size, bold=False,
+                      anchor="top", color=body_col)
+
+
+def render_numbered_columns(slide, cfg, dark=False):
+    """Архетип 5A — открытые нумерованные колонки: без заливки, в каждой колонке
+    зелёная черта сверху, заголовок + текст, внизу крупный зелёный номер (~40pt).
+
+    cfg["columns"]: [{"title","text","number"}]
+    """
+    cols_data = cfg.get("columns", [])
+    n = len(cols_data)
+    if n == 0:
+        return
+    gap = cfg.get("gap", 32)
+    top = cfg.get("content_top", SAFE_TOP)
+    cw = int((SAFE_W - (n - 1) * gap) / n)
+    num_h = 90
+    num_y = SAFE_BOTTOM - num_h
+    title_col = WHITE if dark else GRAPHITE
+    body_col = RGBColor(0xCF, 0xCF, 0xCF) if dark else TEXT_GRAY
+    num_color = _hex(cfg["number_color"]) if cfg.get("number_color") else GREEN
+    for i, col in enumerate(cols_data):
+        x = SAFE_LEFT + i * (cw + gap)
+        # Зелёная черта сверху ОТКЛЮЧЕНА по умолчанию (сверено по референсам:
+        # открытые колонки без декоративной линии). Включается cfg["rule"]=True.
+        if cfg.get("rule", False):
+            rule = slide.shapes.add_shape(MSO_SHAPE.RECTANGLE,
+                                          px(x), px(top), px(cw), px(3))
+            rule.fill.solid(); rule.fill.fore_color.rgb = GREEN
+            rule.line.fill.background(); _no_effects(rule)
+        title = col.get("title", "")
+        text = col.get("text", "")
+        lines = [l for l in (title, text) if l]
+        sizes, bolds, cols_c = [], [], []
+        if title:
+            sizes.append(cfg.get("title_size", 20)); bolds.append(True)
+            cols_c.append(title_col)
+        if text:
+            sizes.append(cfg.get("text_size", 15)); bolds.append(False)
+            cols_c.append(body_col)
+        add_block(slide, x, top + 16, cw, num_y - (top + 16) - 12, lines,
+                  font_sizes=sizes, bolds=bolds,
+                  fill=("dark" if dark else "white"),
+                  vanchor="top", text_colors=cols_c)
+        # Крупный номер внизу — REGULAR-начертание (сверено: не bold), крупнее.
+        add_label(slide, x, num_y, cw, num_h,
+                  str(col.get("number", "%02d" % (i + 1))),
+                  font_size=cfg.get("number_size", 56), bold=False,
+                  align="left", anchor="middle", color=num_color)
+
+
+def render_hero_statement(slide, cfg, dark=False):
+    """Архетип 6 — hero-утверждение: крупный текст (~54pt CAPS) на зелёной плашке
+    + 2 смещённые контурные рамки (декор) + поддерживающий текст снизу-справа.
+
+    cfg["statement"] (обязат.), cfg["support"] (опц.)
+    """
+    statement = cfg.get("statement", "")
+    support = cfg.get("support", "")
+    bx, by = SAFE_LEFT, cfg.get("content_top", SAFE_TOP) + 30
+    bw = int(SAFE_W * 0.72)
+    # Плашка «обнимает» текст: высота считается под число строк. Если не влезает
+    # по высоте — уменьшаем кегль (до 32pt), чтобы текст не вытекал за зелёный блок.
+    margin = 32
+    inner_w = bw - 2 * margin
+    block_bottom_max = cfg.get("block_bottom_max", 545)
+    fs = cfg.get("statement_size", 54)
+    text_caps = statement.upper()
+    while True:
+        font_px = fs * 4.0 / 3.0
+        line_h = 1.30 * font_px
+        char_w = 0.66 * font_px           # CAPS-буквы шире обычных
+        n_lines = _wrapped_lines(text_caps, inner_w, char_w)
+        bh = int(n_lines * line_h + 2 * 24)   # + верх/низ поля по 24
+        if by + bh <= block_bottom_max or fs <= 32:
+            break
+        fs -= 4
+    # Смещённые контурные рамки (рисуем ПЕРЕД плашкой — выглядывают снизу-справа).
+    for off in (24, 12):
+        fr = slide.shapes.add_shape(MSO_SHAPE.RECTANGLE,
+                                    px(bx + off), px(by + off), px(bw), px(bh))
+        fr.fill.background()
+        fr.line.color.rgb = GREEN
+        fr.line.width = Emu(int(1.0 * 12700))
+        _no_effects(fr)
+    block = slide.shapes.add_shape(MSO_SHAPE.RECTANGLE, px(bx), px(by), px(bw), px(bh))
+    block.fill.solid(); block.fill.fore_color.rgb = GREEN
+    block.line.fill.background(); _no_effects(block)
+    tf = block.text_frame
+    tf.word_wrap = True
+    tf.vertical_anchor = MSO_ANCHOR.MIDDLE
+    tf.margin_left = Emu(32 * EMU)
+    tf.margin_right = Emu(32 * EMU)
+    tf.margin_top = Emu(24 * EMU)
+    tf.margin_bottom = Emu(24 * EMU)
+    p = tf.paragraphs[0]
+    p.alignment = PP_ALIGN.LEFT
+    run = p.add_run()
+    run.text = statement.upper()
+    run.font.size = Pt(fs)
+    _set_weight(run.font, True)
+    run.font.color.rgb = GRAPHITE
+    if support:
+        sx = bx + bw - 360
+        add_label(slide, sx, by + bh + 36, SAFE_RIGHT - sx, 90, support,
+                  font_size=cfg.get("support_size", 16), bold=False,
+                  align="right", anchor="top",
+                  color=WHITE if dark else GRAPHITE)
+
+
+_PRESETS = {
+    "numbered_rows": render_numbered_rows,
+    "numbered_columns": render_numbered_columns,
+    "card_grid": render_card_grid,
+    "hero_statement": render_hero_statement,
+}
+
+
 def render_flow_diagram_slide(slide, flow_config, dark=False):
     """Собирает flow-схему на готовом (очищенном) blank slide.
 
@@ -730,11 +1123,16 @@ def render_flow_diagram_slide(slide, flow_config, dark=False):
     if not isinstance(flow_config, dict):
         raise ValueError("flow_config должен быть dict")
 
-    # 1. Header
+    # 1. Header (заголовок ВСЕГДА в safe space через TITLE-placeholder @35,38).
     header = flow_config.get("header", "")
     if header:
         add_header(slide, header, dark=dark)
-        add_top_separator(slide)
+        # Дивайдер под заголовком БОЛЬШЕ НЕ рисуем по умолчанию (правило 2026-06-01):
+        # он не нужен между заголовком и контентом. Включается ТОЛЬКО явным флагом
+        # flow_config["top_separator"]=true — например, чтобы отделять абзацы
+        # друг от друга в определённых типах слайда.
+        if flow_config.get("top_separator"):
+            add_top_separator(slide)
 
     # 1a. Subtitle / URL
     subtitle = flow_config.get("subtitle")
@@ -747,6 +1145,41 @@ def render_flow_diagram_slide(slide, flow_config, dark=False):
         add_label(slide, 35, 144, 1000, 20, subtitle_url,
                   font_size=12, bold=False, align="left",
                   color=DASH_GRAY)
+
+    # 1b. Отступ тела под подзаголовок: при наличии subtitle/URL контент пресета
+    #     стартует ниже, чтобы не прижимался к подзаголовку (правило 2026-06-01).
+    #     Пользователь может задать content_top явно — тогда не трогаем.
+    if "content_top" not in flow_config:
+        if subtitle_url:
+            flow_config["content_top"] = 190
+        elif subtitle:
+            flow_config["content_top"] = 172
+        else:
+            flow_config["content_top"] = SAFE_TOP
+
+    # 1c. Preset-архетипы (готовые композиции). Если задан preset — рисуем тело
+    #     слайда соответствующей функцией и выходим (header/subtitle уже выше).
+    preset = flow_config.get("preset")
+    if preset:
+        fn = _PRESETS.get(preset)
+        if fn is None:
+            raise ValueError(
+                "Неизвестный preset '%s'. Доступны: %s"
+                % (preset, ", ".join(sorted(_PRESETS)))
+            )
+        fn(slide, flow_config, dark=dark)
+        decor = flow_config.get("decor")
+        if decor and decor.get("enabled"):
+            add_decor_diagonals(
+                slide,
+                count=decor.get("count", 4),
+                x_start=decor.get("x_start", 20),
+                y_start=decor.get("y_start", 620),
+                size=decor.get("size", 70),
+                gap=decor.get("gap", 14),
+                w_pt=decor.get("w_pt", 1.4),
+            )
+        return
 
     # 2. Blocks — собираем по id для arrow refs
     blocks = flow_config.get("blocks", [])
@@ -772,9 +1205,12 @@ def render_flow_diagram_slide(slide, flow_config, dark=False):
                 b["id"] = "%s,%s" % (b["row"], b["col"])
 
     # 1d. Залитые панели-секции (style="panel") — ФОНОМ, до блоков (нагруженные схемы).
+    #     Притягиваем края к направляющим safe-area (фреймы до конца, без выхода за поля).
     for grp in flow_config.get("groups", []):
         if grp.get("style") == "panel":
-            add_filled_panel(slide, grp["x"], grp["y"], grp["w"], grp["h"],
+            sx, sy, sw, sh = snap_panel_to_safe(
+                grp["x"], grp["y"], grp["w"], grp["h"])
+            add_filled_panel(slide, sx, sy, sw, sh,
                              label=grp.get("label"), dark=dark, fill=grp.get("fill"))
 
     blocks_by_id = {}
@@ -798,7 +1234,8 @@ def render_flow_diagram_slide(slide, flow_config, dark=False):
     for grp in flow_config.get("groups", []):
         if grp.get("style") == "panel":
             continue
-        gx, gy, gw, gh = grp["x"], grp["y"], grp["w"], grp["h"]
+        gx, gy, gw, gh = snap_panel_to_safe(
+            grp["x"], grp["y"], grp["w"], grp["h"])
         add_dashed_rect(slide, gx, gy, gw, gh)
         label_text = grp.get("label")
         if label_text:
