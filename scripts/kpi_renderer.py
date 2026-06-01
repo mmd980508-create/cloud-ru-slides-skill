@@ -330,8 +330,9 @@ BLANK_DONOR_DARK = int(_blank_cfg.get("dark", _BLANK_DEFAULTS["dark"]))
 # Standalone test
 if __name__ == "__main__":
     from pptx import Presentation
+    from template_path import resolve_template
 
-    p = Presentation("template/Cloud.ru_Template_2026.pptx")
+    p = Presentation(resolve_template())
     # Use slide 30 as clean blank donor — but FULLY clean shapes
     slide = list(p.slides)[BLANK_DONOR_WHITE - 1]
     clean_slide_to_blank(slide)

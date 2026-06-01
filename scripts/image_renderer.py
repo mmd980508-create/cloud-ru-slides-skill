@@ -126,7 +126,8 @@ def render_image_native(slide, image_config, dark=False, wide_zone=False):
 # Test standalone
 if __name__ == "__main__":
     from pptx import Presentation
-    p = Presentation("template/Cloud.ru_Template_2026.pptx")
+    from template_path import resolve_template
+    p = Presentation(resolve_template())
     slide = list(p.slides)[BLANK_DONOR_WHITE - 1]
     clean_slide_to_blank(slide)
 
