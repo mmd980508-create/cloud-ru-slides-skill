@@ -141,11 +141,9 @@ def _add_accent_bar(slide, left_px, top_px, width_px, height_px, color=GREEN):
     shape.fill.solid()
     shape.fill.fore_color.rgb = color
     shape.line.fill.background()  # без рамки
-    # без эффектов (брендбук: no shadow/glow)
-    spPr = shape._element.spPr
-    for tag in ("effectLst", "effectDag"):
-        for e in spPr.findall(qn(f"a:{tag}")):
-            spPr.remove(e)
+    # Снять любые эффекты — и явные, и тематические (effectRef). Плоско, без исключений.
+    from effects_util import strip_effects
+    strip_effects(shape._element)
     return shape
 
 
@@ -292,13 +290,12 @@ def render_kpi(slide, kpi_config, dark=False):
                       value, font_size_pt=NUMBER_FONT, bold=False, color=color,
                       align=PP_ALIGN.CENTER, anchor=MSO_ANCHOR.MIDDLE)
 
-        # Accent (Problem #2): главный показатель помечается зелёной плашкой-
-        # маркером НАД цифрой, а не зелёным цветом цифры. Геометрически безопасно
-        # (не перекрывает глиф при любом кегле 100–199pt).
-        if is_accent:
-            bar_w, bar_h = 56, 6
-            cx = x + block_width // 2
-            _add_accent_bar(slide, cx - bar_w // 2, NUMBER_TOP - 20, bar_w, bar_h)
+        # Accent: тонкая зелёная полоса-маркер над цифрой УБРАНА — как акцент она
+        # СЛАБА (user 2026-06-02: «зелёный маркер недостаточен для акцента, так не
+        # делай никогда»). Сильный акцент = СУБСТАНЦИОНАЛЬНАЯ зелёная заливка-блок
+        # (графитовая цифра на зелёном) или композиция, а не тонкая черта.
+        # Замена-механизм согласуется отдельно (см. ответ к user 2026-06-02).
+        _ = is_accent
 
         # Optional % sign — small, top-right corner of number box
         if has_pct:

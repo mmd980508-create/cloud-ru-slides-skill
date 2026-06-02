@@ -177,6 +177,15 @@ def _iter_text_shapes(shapes):
                 yield (sh, runs)
 
 
+def strip_shape_effects(slide):
+    """Снимает ЛЮБЫЕ эффекты (тени/glow/reflection/softEdge) со всех фигур слайда —
+    и явные (effectLst/effectDag в spPr), и тематические (p:style/effectRef→idx=0).
+    На раскладку/цвет/текст не влияет (безопасно для clone-доноров). Бренд: плоско,
+    эффектов нет вообще (user 2026-06-02). Возвращает счётчик изменённых фигур."""
+    from effects_util import strip_effects_recursive
+    return strip_effects_recursive(slide.shapes)
+
+
 def _shape_max_font_pt(shape):
     mx = 0
     try:
@@ -310,7 +319,9 @@ def enforce_canonical_slide(slide, dark=False, min_pt=12, bump_from=None, bump_t
                             normalize_header=False):
     """Приводит слайд к canonical. Возвращает счётчики изменений."""
     stats = {"green_text": 0, "white_on_light": 0, "bold": 0, "size_min": 0,
-             "size_bump": 0, "header_norm": 0}
+             "size_bump": 0, "header_norm": 0, "effects": 0}
+    # Стоп-лист: снять тени/эффекты со ВСЕХ фигур (user 2026-06-02).
+    stats["effects"] = strip_shape_effects(slide)
     if normalize_header:
         if normalize_header_to_placeholder(slide, dark=dark):
             stats["header_norm"] = 1

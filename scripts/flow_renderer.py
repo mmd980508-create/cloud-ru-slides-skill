@@ -195,11 +195,10 @@ def px(v):
 
 
 def _no_effects(shape):
-    """Удалить drop-shadow / glow эффекты из shape (брендбук: no effects)."""
-    spPr = shape._element.spPr
-    for tag in ("effectLst", "effectDag"):
-        for e in spPr.findall(qn(f"a:{tag}")):
-            spPr.remove(e)
+    """Снять любые эффекты (тени/glow/reflection) — и явные, и тематические
+    (effectRef). Бренд: плоско, эффектов нет вообще. См. effects_util."""
+    from effects_util import strip_effects
+    strip_effects(shape._element)
 
 
 def _resolve_fill(fill_name):
@@ -676,7 +675,10 @@ def add_svg_picture(slide, svg_bytes, x, y, w, h):
 def _draw_arrow_lines(slide, x, y, size, w_pt, color):
     """Рисует фирменную стрелку ↗ нативными линиями PowerPoint, возвращает список
     линий-фигур. Геометрия = brand_arrow.svg: уголок-наконечник ↗ (верхняя грань +
-    правая грань) + диагональ-древко из нижнего-левого к наконечнику."""
+    правая грань) + диагональ-древко из нижнего-левого к наконечнику.
+
+    Цвет бренд-стрелок — зелёный ИЛИ серый, обе опции валидны (user 2026-06-02).
+    Дефолт — зелёный (canon §8); передай color=ARROW_COLOR для серого варианта."""
     c = color if color is not None else GREEN
     top = slide.shapes.add_connector(
         MSO_CONNECTOR.STRAIGHT, px(x), px(y), px(x + size), px(y))
@@ -688,6 +690,7 @@ def _draw_arrow_lines(slide, x, y, size, w_pt, color):
     for ln in (top, right, shaft):
         ln.line.color.rgb = c
         ln.line.width = Emu(int(w_pt * 12700))
+        _no_effects(ln)   # коннекторы тоже без эффектов (плоско, без теней)
     return [top, right, shaft]
 
 
@@ -1016,8 +1019,9 @@ def render_numbered_columns(slide, cfg, dark=False):
     num_color = _hex(cfg["number_color"]) if cfg.get("number_color") else GREEN
     for i, col in enumerate(cols_data):
         x = SAFE_LEFT + i * (cw + gap)
-        # Зелёная черта сверху ОТКЛЮЧЕНА по умолчанию (сверено по референсам:
-        # открытые колонки без декоративной линии). Включается cfg["rule"]=True.
+        # Черта сверху ОТКЛЮЧЕНА по умолчанию (сверено по референсам: открытые
+        # колонки без декоративной линии). Если включить cfg["rule"]=True — зелёная
+        # (canon §5A): она привязана к колонке и держит композицию — допустимо.
         if cfg.get("rule", False):
             rule = slide.shapes.add_shape(MSO_SHAPE.RECTANGLE,
                                           px(x), px(top), px(cw), px(3))
@@ -1071,6 +1075,9 @@ def render_hero_statement(slide, cfg, dark=False):
             break
         fs -= 4
     # Смещённые контурные рамки (рисуем ПЕРЕД плашкой — выглядывают снизу-справа).
+    # Зелёные outline-рамки: привязаны к hero-блоку (offset-композиция, blueprint-
+    # глубина) — это КОМПОЗИЦИЯ, не «недолиния» → зелёный допустим (user 2026-06-02).
+    # (Можно переключить на серый — обе опции валидны.)
     for off in (24, 12):
         fr = slide.shapes.add_shape(MSO_SHAPE.RECTANGLE,
                                     px(bx + off), px(by + off), px(bw), px(bh))

@@ -413,10 +413,9 @@ def _ba_rect(slide, x, y, w, h, fill_rgb):
     rect.fill.solid()
     rect.fill.fore_color.rgb = fill_rgb
     rect.line.fill.background()
-    spPr = rect._element.spPr
-    for tag in ("effectLst", "effectDag"):
-        for e in spPr.findall(qn(f"a:{tag}")):
-            spPr.remove(e)
+    # Снять любые эффекты — и явные, и тематические (effectRef). Плоско, без исключений.
+    from effects_util import strip_effects
+    strip_effects(rect._element)
     return rect
 
 
