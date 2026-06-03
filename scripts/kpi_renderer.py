@@ -69,6 +69,9 @@ FONT_SEMIBOLD = "SB Sans Display Semibold"
 # Canonical §4 (slide 43): фрейм 199pt помещает максимум 2 значащих цифры.
 KPI_HERO_DIGIT_LIMIT = 2
 
+# Брендбук §6: у крупных цифр отрицательный трекинг. spc в 1/100 pt (user 2026-06-02).
+BIG_NUMBER_SPC = -400
+
 
 def _count_significant_digits(value):
     """Считает значащие цифры в KPI value, игнорируя разделители и unit-suffix.
@@ -92,7 +95,7 @@ def _count_significant_digits(value):
 def _add_text_box(slide, left_px, top_px, width_px, height_px, text,
                   font_size_pt=14, font_name=None,
                   bold=False, color=GRAPHITE, align=PP_ALIGN.LEFT,
-                  anchor=MSO_ANCHOR.TOP):
+                  anchor=MSO_ANCHOR.TOP, spc=None):
     """Add text box with canonical font/size/color.
 
     Эмфаза (bold=True) реализуется через начертание SemiBold, а не bold-флаг
@@ -122,6 +125,10 @@ def _add_text_box(slide, left_px, top_px, width_px, height_px, text,
     run.font.size = Pt(font_size_pt)
     run.font.bold = False
     run.font.color.rgb = color
+    # letter-spacing (1/100 pt, может быть отрицательным) — для крупных цифр
+    # брендбук §6 требует отрицательный трекинг.
+    if spc is not None:
+        run._r.get_or_add_rPr().set("spc", str(int(spc)))
     return box
 
 
@@ -285,10 +292,11 @@ def render_kpi(slide, kpi_config, dark=False):
                     file=sys.stderr,
                 )
 
-        # Number text box
+        # Number text box (крупная цифра → отрицательный трекинг, брендбук §6)
         _add_text_box(slide, x, NUMBER_TOP, block_width, NUMBER_HEIGHT,
                       value, font_size_pt=NUMBER_FONT, bold=False, color=color,
-                      align=PP_ALIGN.CENTER, anchor=MSO_ANCHOR.MIDDLE)
+                      align=PP_ALIGN.CENTER, anchor=MSO_ANCHOR.MIDDLE,
+                      spc=BIG_NUMBER_SPC)
 
         # Accent: тонкая зелёная полоса-маркер над цифрой УБРАНА — как акцент она
         # СЛАБА (user 2026-06-02: «зелёный маркер недостаточен для акцента, так не
