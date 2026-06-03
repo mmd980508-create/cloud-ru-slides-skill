@@ -589,6 +589,47 @@ def check_shape_geometry(slide):
     return out
 
 
+# Copy-стоп-лист (Point 8): штампы/филлер. Тесный список — НЕ трогаем легитимную
+# лексику Cloud.ru («надёжный», «облако», «инфраструктура», «безопасность» и т.п.).
+COPY_CLICHES = (
+    "в современном мире", "в наше время", "в эпоху цифровизации",
+    "в сегодняшнем мире", "сегодня как никогда",
+    "раскрыть потенциал", "раскрыть весь потенциал", "полностью раскрыть потенциал",
+    "в заключение", "подводя итог", "подводя итоги",
+    "более того", "стоит отметить", "важно отметить", "необходимо отметить",
+    "бесшовн", "синерги", "инновационные решения",
+)
+
+
+def check_copy(slide):
+    """Copy-quality: ищет штампы/филлер в тексте слайда → warnings (Point 8)."""
+    issues = []
+    seen = set()
+    full = []
+    for sh in slide.shapes:
+        if not getattr(sh, "has_text_frame", False) or not sh.has_text_frame:
+            continue
+        t = sh.text_frame.text
+        if not t.strip():
+            continue
+        low = t.lower()
+        full.append(low)
+        for c in COPY_CLICHES:
+            if c in low and c not in seen:
+                seen.add(c)
+                issues.append({
+                    "type": "copy_cliche",
+                    "msg": f"Штамп/филлер «{c}» — заменить на конкретику.",
+                })
+    joined = " ".join(full)
+    if "не просто" in joined:
+        issues.append({
+            "type": "copy_cliche",
+            "msg": "Конструкция «не просто X — это/а Y» заезжена — сказать прямо.",
+        })
+    return issues
+
+
 def check_slop(slide):
     """Anti-slop эвристики (AI-tells), которых не ловят остальные чеки:
       • card_in_card    — крупный filled-прямоугольник внутри другого (вложенные боксы);
@@ -737,7 +778,7 @@ CATEGORY_OF = {
     # anti-slop (Point 5)
     "rainbow_accents": "Color", "gradient_text": "Color", "muddy_hierarchy": "Typography",
     # Content / anti-slop
-    "emoji": "Content", "overflow": "Content",
+    "emoji": "Content", "overflow": "Content", "copy_cliche": "Content",
 }
 
 
@@ -932,6 +973,10 @@ def validate_slide(slide, slide_num):
     # Anti-slop эвристики (AI-tells) — warnings (Point 5)
     for sl in check_slop(slide):
         result["warnings"].append(sl)
+
+    # Copy-quality: штампы/филлер — warnings (Point 8)
+    for cc in check_copy(slide):
+        result["warnings"].append(cc)
 
     is_dark = _is_dark_slide(slide)
     result["stats"]["is_dark"] = is_dark
