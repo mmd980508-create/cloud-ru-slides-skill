@@ -59,6 +59,7 @@ _TPL_VER = _load_template_version()
 GRAPHITE = RGBColor(0x22, 0x22, 0x22)
 GREEN = RGBColor(0x26, 0xD0, 0x7C)
 WHITE = RGBColor(0xFF, 0xFF, 0xFF)
+GRAY = RGBColor(0xF2, 0xF2, 0xF2)
 
 FONT = "SB Sans Display"
 # Полужирное = отдельный font face (встроен в шаблон), НЕ bold-флаг.
@@ -129,6 +130,37 @@ def _add_text_box(slide, left_px, top_px, width_px, height_px, text,
     # брендбук §6 требует отрицательный трекинг.
     if spc is not None:
         run._r.get_or_add_rPr().set("spc", str(int(spc)))
+    return box
+
+
+def _add_number_box(slide, x, y, w, h, value, pct=False, size=130, color=GRAPHITE,
+                    align=PP_ALIGN.LEFT, anchor=MSO_ANCHOR.TOP):
+    """Крупная цифра (Regular, отрицательный трекинг §6) + опц. знак % в строке
+    (меньшим кеглем). Выравнивание задаётся align/anchor — по умолчанию верх-лево
+    (редакторский край-стиль, не центр)."""
+    EMU = 9525
+    box = slide.shapes.add_textbox(Emu(int(x) * EMU), Emu(int(y) * EMU),
+                                   Emu(int(w) * EMU), Emu(int(h) * EMU))
+    tf = box.text_frame
+    tf.word_wrap = False
+    tf.vertical_anchor = anchor
+    tf.margin_left = tf.margin_right = tf.margin_top = tf.margin_bottom = 0
+    p = tf.paragraphs[0]
+    p.alignment = align
+    r = p.add_run()
+    r.text = str(value)
+    r.font.name = FONT
+    r.font.size = Pt(size)
+    r.font.bold = False
+    r.font.color.rgb = color
+    r._r.get_or_add_rPr().set("spc", str(int(BIG_NUMBER_SPC)))
+    if pct:
+        rp = p.add_run()
+        rp.text = "%"
+        rp.font.name = FONT
+        rp.font.size = Pt(max(28, size // 3))
+        rp.font.bold = False
+        rp.font.color.rgb = color
     return box
 
 
@@ -242,6 +274,12 @@ def render_kpi(slide, kpi_config, dark=False):
     if n == 0 or n > 3:
         raise ValueError(f"KPI supports 1-3 numbers, got {n}")
 
+    # Card-layout (user-decision 2026-06-02): все цифры в отдельных карточках,
+    # акцентная — зелёная. ТОЛЬКО в этом варианте допустима зелёная акцент-плашка
+    # (у «голых» крупных цифр акцента нет).
+    if kpi_config.get("layout") == "cards":
+        return render_kpi_cards(slide, kpi_config, dark=dark)
+
     # Title — в штатный placeholder шаблона (Problem #6)
     title = kpi_config.get("title", "")
     if title:
@@ -292,34 +330,63 @@ def render_kpi(slide, kpi_config, dark=False):
                     file=sys.stderr,
                 )
 
-        # Number text box (крупная цифра → отрицательный трекинг, брендбук §6)
-        _add_text_box(slide, x, NUMBER_TOP, block_width, NUMBER_HEIGHT,
-                      value, font_size_pt=NUMBER_FONT, bold=False, color=color,
-                      align=PP_ALIGN.CENTER, anchor=MSO_ANCHOR.MIDDLE,
-                      spc=BIG_NUMBER_SPC)
-
-        # Accent: тонкая зелёная полоса-маркер над цифрой УБРАНА — как акцент она
-        # СЛАБА (user 2026-06-02: «зелёный маркер недостаточен для акцента, так не
-        # делай никогда»). Сильный акцент = СУБСТАНЦИОНАЛЬНАЯ зелёная заливка-блок
-        # (графитовая цифра на зелёном) или композиция, а не тонкая черта.
-        # Замена-механизм согласуется отдельно (см. ответ к user 2026-06-02).
+        # АКЦЕНТ у «голых» крупных цифр НЕ ставим (user-decision 2026-06-02):
+        # большие цифры на слайде — без акцента (ни плашки, ни полосы). Зелёная
+        # акцентная плашка допустима ТОЛЬКО когда все цифры помещены в отдельные
+        # карточки (card-layout) — это отдельный вариант, не этот «голый» рендер.
+        # Начертание крупной цифры — Regular (bold=False), брендово.
         _ = is_accent
 
-        # Optional % sign — small, top-right corner of number box
-        if has_pct:
-            pct_size = max(40, NUMBER_FONT // 3)  # % about 1/3 of number
-            pct_x = x + block_width - 70
-            pct_y = NUMBER_TOP + 20
-            _add_text_box(slide, pct_x, pct_y, 60, 80, "%",
-                          font_size_pt=pct_size, bold=True, color=color,
-                          align=PP_ALIGN.LEFT, anchor=MSO_ANCHOR.TOP)
+        # Цифра + % одним боксом, выравнивание по ЛЕВОМУ краю сетки (не центр) —
+        # редакторский край-стиль (user-decision 2026-06-02). Трекинг §6.
+        _add_number_box(slide, x, NUMBER_TOP, block_width, NUMBER_HEIGHT,
+                        value, pct=has_pct, size=NUMBER_FONT, color=color,
+                        align=PP_ALIGN.LEFT, anchor=MSO_ANCHOR.MIDDLE)
 
-        # Description below
+        # Description below — тоже по левому краю
         desc = num.get("desc", "")
         if desc:
             _add_text_box(slide, x, DESC_TOP, block_width, DESC_HEIGHT,
                           desc, font_size_pt=16, bold=False, color=text_color,
-                          align=PP_ALIGN.CENTER, anchor=MSO_ANCHOR.TOP)
+                          align=PP_ALIGN.LEFT, anchor=MSO_ANCHOR.TOP)
+
+
+def render_kpi_cards(slide, kpi_config, dark=False):
+    """KPI в карточках: каждая цифра в отдельной карточке #F2F2F2, акцентная —
+    ЗЕЛЁНАЯ (графитовая цифра на зелёном; white-on-green запрещён). Только в этом
+    варианте допустима зелёная акцент-плашка (user-decision 2026-06-02). Цифра —
+    Regular-начертание (bold=False), отрицательный трекинг (§6)."""
+    numbers = kpi_config.get("numbers", [])
+    n = len(numbers)
+    title = kpi_config.get("title", "")
+    if title:
+        set_slide_title(slide, title, dark=dark)
+
+    SAFE_L, SAFE_R = 35, 1245
+    gap = 20
+    cw = int((SAFE_R - SAFE_L - gap * (n - 1)) / n)
+    CARD_Y, CARD_H = 175, 430
+    NUMBER_FONT = 130 if n >= 2 else 199
+    if n == 3 and max(len(x["value"]) for x in numbers) > 3:
+        NUMBER_FONT = 100
+
+    PAD = 28
+    for i, num in enumerate(numbers):
+        x = SAFE_L + i * (cw + gap)
+        is_accent = num.get("accent", False)
+        # карточка (filled rect, без эффектов) — рисуется ПЕРВОЙ, контент поверх
+        _add_accent_bar(slide, x, CARD_Y, cw, CARD_H, color=(GREEN if is_accent else GRAY))
+        # Выравнивание по КРАЯМ карточки (не центр): цифра — верх-лево, подпись —
+        # низ-лево. Цифра графит Regular (читаемо на сером и зелёном), трекинг §6.
+        _add_number_box(slide, x + PAD, CARD_Y + PAD, cw - 2 * PAD, 230,
+                        num["value"], pct=num.get("pct", False),
+                        size=NUMBER_FONT, color=GRAPHITE,
+                        align=PP_ALIGN.LEFT, anchor=MSO_ANCHOR.TOP)
+        desc = num.get("desc", "")
+        if desc:
+            _add_text_box(slide, x + PAD, CARD_Y + CARD_H - PAD - 64, cw - 2 * PAD, 64,
+                          desc, font_size_pt=16, bold=False, color=GRAPHITE,
+                          align=PP_ALIGN.LEFT, anchor=MSO_ANCHOR.BOTTOM)
 
 
 # Constants for blank donor selection.
