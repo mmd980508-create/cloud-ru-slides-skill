@@ -2,6 +2,32 @@
 
 > Каждая итерация добавляет сюда: что не работало → что сделали → ссылка на коммит/файл.
 
+## v2.4.2 — 2026-06-02 — Point 3: token-diff/конформанс свёрнут в brand_guardian
+
+Из дизайн-аудита п.3 (token-diff: сверка слайда с бренд-контрактом). По решению
+user — НЕ плодить сущности: всё сложено в существующий `brand_guardian`, а не в
+отдельный файл (черновой `token_diff.py` удалён).
+
+### ✅ Что добавилось в brand_guardian (это были ПРОБЕЛЫ — гард их не ловил)
+- **Shape-ось** (`check_shape_geometry`): скругления `roundRect/snip…` → WARN
+  (допустимо только как метафора), эффекты `effectLst/outerShdw/glow…` на фигурах
+  → FAIL. Раньше гард проверял текст/цвет/стрелки, а форму фигур — нет.
+- **Italic / underline** в text-run → WARN (раньше ловил только bold-флаг).
+- **`axis_report(pptx)`** — группирует все находки гарда по осям
+  **Color / Typography / Shape** (формат MATCH/DIVERGE для scorecard/печати).
+  Единая точка чеков — не дублирует логику палитры/шрифтов.
+
+### Проверено
+- off-brand `before.pptx` → FAIL (ловит roundRect, effectLst, Arial, italic, не-палитру);
+- нормализованный `after.pptx` → PASS;
+- реальный сгенерённый деком → 94.3/100, новые чеки БЕЗ ложных срабатываний
+  (enforce_canonical уже снял эффекты, доноры прямоугольные). FAIL там — от
+  пред-существующего `color_off_palette`, не от новых проверок.
+
+### Тест
+`tests/point3_tokendiff/build.py` — Cloud.ru-scorecard БЫЛО/СТАЛО (данные из
+`brand_guardian.axis_report`).
+
 ## v2.4.1 — 2026-06-02 — FIX: clone_slide портил файл (PowerPoint repair + слетали картинки)
 
 ### ⚠️ Симптом

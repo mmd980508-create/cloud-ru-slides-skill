@@ -289,6 +289,20 @@ def check_text_frame(tf, slide_width_emu=12192000, slide_height_emu=6858000, is_
                     "msg": "Bold-флаг (b=1). По бренду эмфаза только через начертание «SB Sans Display Semibold», не bold.",
                 })
 
+            # 2c. Italic / underline запрещены (brand-rules §2).
+            if font.italic:
+                issues["warnings"].append({
+                    "type": "italic",
+                    "text_preview": text_run[:30],
+                    "msg": "Italic (i=1) — по бренду без курсива.",
+                })
+            if font.underline:
+                issues["warnings"].append({
+                    "type": "underline",
+                    "text_preview": text_run[:30],
+                    "msg": "Underline — по бренду без подчёркивания.",
+                })
+
             # 3. Цвет (с tolerance для близких к палитре)
             try:
                 if font.color and font.color.type is not None:
@@ -531,6 +545,82 @@ def check_arrow_colors(slide):
     return violations
 
 
+# Форма (brand-rules §2): прямые углы, без теней/glow.
+ROUNDED_PRESETS = ("roundRect", "round1Rect", "round2SameRect", "round2DiagRect",
+                   "snip1Rect", "snip2SameRect", "snip2DiagRect", "snipRoundRect")
+EFFECT_TAGS = ("effectLst", "effectDag", "outerShdw", "innerShdw", "prstShdw",
+               "glow", "reflection", "softEdge")
+
+
+def _iter_all_shapes(shapes):
+    """Рекурсивно все фигуры (вкл. содержимое групп)."""
+    for sh in shapes:
+        yield sh
+        try:
+            if sh.shape_type == 6:  # GROUP
+                yield from _iter_all_shapes(sh.shapes)
+        except Exception:
+            pass
+
+
+def check_shape_geometry(slide):
+    """Форма: скругления (warning — допустимо только как метафора) и эффекты-тени
+    (violation — запрещены). Возвращает {'violations':[], 'warnings':[]}."""
+    out = {"violations": [], "warnings": []}
+    for idx, sh in enumerate(_iter_all_shapes(slide.shapes)):
+        spPr = sh._element.find(qn("p:spPr"))
+        if spPr is None:
+            continue
+        geom = spPr.find(qn("a:prstGeom"))
+        if geom is not None and geom.get("prst") in ROUNDED_PRESETS:
+            out["warnings"].append({
+                "type": "rounded_shape", "shape_idx": idx,
+                "msg": f"Скруглённая форма '{geom.get('prst')}' — по бренду прямые углы (искл. метафора).",
+            })
+        for tag in EFFECT_TAGS:
+            for e in spPr.findall(qn(f"a:{tag}")):
+                if tag in ("effectLst", "effectDag") and len(e) == 0:
+                    continue  # пустой effectLst = эффектов нет
+                out["violations"].append({
+                    "type": "shape_effect", "shape_idx": idx,
+                    "msg": f"Эффект <{tag}> на фигуре — по бренду без теней/glow.",
+                })
+                break
+    return out
+
+
+# Сопоставление типов issue → оси отчёта (Color / Typography / Shape).
+AXIS_OF = {
+    "color_off_palette": "Color", "color_near_palette": "Color", "colored_text": "Color",
+    "mixed_palettes": "Color", "extended_without_green": "Color", "green_arrow": "Color",
+    "composition_subtitle_green": "Color",
+    "font": "Typography", "bold_flag": "Typography", "italic": "Typography",
+    "underline": "Typography", "size_too_small": "Typography", "size_below_comfortable": "Typography",
+    "rounded_shape": "Shape", "shape_effect": "Shape",
+}
+
+
+def axis_report(pptx_path):
+    """Прогоняет validate_slide по всем слайдам и группирует issues по осям
+    Color/Typography/Shape (token-diff формат MATCH/DIVERGE). Всё на базе того же
+    brand_guardian — единый источник чеков. → dict для scorecard/печати."""
+    p = Presentation(pptx_path)
+    slides = []
+    for i, slide in enumerate(p.slides, 1):
+        r = validate_slide(slide, i)
+        axes = {"Color": [], "Typography": [], "Shape": []}
+        for it in r["violations"] + r["warnings"]:
+            ax = AXIS_OF.get(it["type"])
+            if ax:
+                axes[ax].append(it["msg"])
+        verdict = "PASS" if all(not v for v in axes.values()) else "DIVERGE"
+        slides.append({"num": i, "axes": axes, "verdict": verdict, "score": r["score"]})
+    summary = {ax: (sum(1 for s in slides if not s["axes"][ax]), len(slides))
+               for ax in ("Color", "Typography", "Shape")}
+    overall = "PASS" if all(s["verdict"] == "PASS" for s in slides) else "DIVERGE"
+    return {"slides": slides, "axes": summary, "overall": overall}
+
+
 def composition_checks(slide):
     """Композиционные проверки: top padding, subtitle color, KPI size consistency."""
     issues = []
@@ -668,6 +758,11 @@ def validate_slide(slide, slide_num):
     # Зелёные стрелки — violation (canonical §3, slide 66)
     for av in check_arrow_colors(slide):
         result["violations"].append(av)
+
+    # Форма: скругления (warning) + эффекты-тени (violation) — brand-rules §2
+    geom = check_shape_geometry(slide)
+    result["violations"].extend(geom["violations"])
+    result["warnings"].extend(geom["warnings"])
 
     is_dark = _is_dark_slide(slide)
     result["stats"]["is_dark"] = is_dark
