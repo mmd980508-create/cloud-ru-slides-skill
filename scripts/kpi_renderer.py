@@ -60,6 +60,7 @@ GRAPHITE = RGBColor(0x22, 0x22, 0x22)
 GREEN = RGBColor(0x26, 0xD0, 0x7C)
 WHITE = RGBColor(0xFF, 0xFF, 0xFF)
 GRAY = RGBColor(0xF2, 0xF2, 0xF2)
+TEXT_GRAY = RGBColor(0x5C, 0x5C, 0x5C)  # 3-й уровень иерархии (ярлыки/подписи)
 
 FONT = "SB Sans Display"
 # Полужирное = отдельный font face (встроен в шаблон), НЕ bold-флаг.
@@ -363,12 +364,13 @@ def render_kpi_cards(slide, kpi_config, dark=False):
         set_slide_title(slide, title, dark=dark)
 
     SAFE_L, SAFE_R = 35, 1245
-    gap = 20
+    gap = 18
     cw = int((SAFE_R - SAFE_L - gap * (n - 1)) / n)
-    CARD_Y, CARD_H = 175, 430
+    # Карточки во всю высоту (под заголовком до копирайта). Title @38 → старт ~125.
+    CARD_Y, CARD_H = 125, 515
     NUMBER_FONT = 130 if n >= 2 else 199
     if n == 3 and max(len(x["value"]) for x in numbers) > 3:
-        NUMBER_FONT = 100
+        NUMBER_FONT = 110
 
     PAD = 28
     for i, num in enumerate(numbers):
@@ -376,17 +378,18 @@ def render_kpi_cards(slide, kpi_config, dark=False):
         is_accent = num.get("accent", False)
         # карточка (filled rect, без эффектов) — рисуется ПЕРВОЙ, контент поверх
         _add_accent_bar(slide, x, CARD_Y, cw, CARD_H, color=(GREEN if is_accent else GRAY))
-        # Выравнивание по КРАЯМ карточки (не центр): цифра — верх-лево, подпись —
-        # низ-лево. Цифра графит Regular (читаемо на сером и зелёном), трекинг §6.
-        _add_number_box(slide, x + PAD, CARD_Y + PAD, cw - 2 * PAD, 230,
-                        num["value"], pct=num.get("pct", False),
-                        size=NUMBER_FONT, color=GRAPHITE,
-                        align=PP_ALIGN.LEFT, anchor=MSO_ANCHOR.TOP)
+        # Ярлык-таб СВЕРХУ (UPPERCASE): на зелёной — графит, на серой — серый (3 ур.).
         desc = num.get("desc", "")
         if desc:
-            _add_text_box(slide, x + PAD, CARD_Y + CARD_H - PAD - 64, cw - 2 * PAD, 64,
-                          desc, font_size_pt=16, bold=False, color=GRAPHITE,
-                          align=PP_ALIGN.LEFT, anchor=MSO_ANCHOR.BOTTOM)
+            lab_color = GRAPHITE if is_accent else TEXT_GRAY
+            _add_text_box(slide, x + PAD, CARD_Y + PAD, cw - 2 * PAD, 30, desc.upper(),
+                          font_size_pt=15, bold=False, color=lab_color,
+                          align=PP_ALIGN.LEFT, anchor=MSO_ANCHOR.TOP)
+        # Крупная цифра У НИЗА карточки (bottom-left), графит Regular, трекинг §6.
+        _add_number_box(slide, x + PAD, CARD_Y + CARD_H - PAD - 200, cw - 2 * PAD, 200,
+                        num["value"], pct=num.get("pct", False),
+                        size=NUMBER_FONT, color=GRAPHITE,
+                        align=PP_ALIGN.LEFT, anchor=MSO_ANCHOR.BOTTOM)
 
 
 # Constants for blank donor selection.
