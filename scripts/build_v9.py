@@ -70,7 +70,9 @@ def clone_slide(prs, src_slide):
     Возвращает новый Slide (последний в prs.slides)."""
     from pptx.opc.constants import CONTENT_TYPE as CT
     from pptx.opc.constants import RELATIONSHIP_TYPE as RT
+    from pptx.opc.constants import RELATIONSHIP_TARGET_MODE as RTM
     from pptx.opc.packuri import PackURI
+    from pptx.opc.package import _Relationship
     from pptx.parts.slide import SlidePart
 
     src_part = src_slide.part
@@ -92,12 +94,28 @@ def clone_slide(prs, src_slide):
         package=package,
     )
 
-    # Копируем relationships от source slide в new slide
+    # Копируем relationships, СОХРАНЯЯ оригинальные rId (fix 2026-06-02).
+    # Почему не relate_to: он ПЕРЕНУМЕРОВЫВАЕТ rId по порядку обхода, а XML слайда
+    # (скопирован блобом) ссылается на ИСХОДНЫЕ rId. В итоге blip-картинка с
+    # r:embed="rId3" начинала указывать на slideLayout вместо изображения →
+    # PowerPoint «не смог прочитать часть содержимого» и удалял картинку.
+    # Сохраняя rId, держим ссылки валидными. notesSlide-связь НЕ копируем: иначе
+    # донорский notesSlide ссылается назад на ОРИГИНАЛ-слайд → тот остаётся
+    # «сиротой» (в пакете, но не в sldIdLst) → PowerPoint repair. Без неё оригинал
+    # недостижим и корректно отбрасывается при save. Заметки донора слайду не нужны.
+    # (Зависит от внутренностей python-pptx 1.0.2: _rels / _Relationship.)
+    dst_rels = new_part.rels
     for rel in src_part.rels.values():
+        if rel.reltype == RT.NOTES_SLIDE:
+            continue
         if rel.is_external:
-            new_part.rels.get_or_add_ext_rel(rel.reltype, rel.target_ref)
+            dst_rels._rels[rel.rId] = _Relationship(
+                dst_rels._base_uri, rel.rId, rel.reltype,
+                target_mode=RTM.EXTERNAL, target=rel.target_ref)
         else:
-            new_part.relate_to(rel.target_part, rel.reltype)
+            dst_rels._rels[rel.rId] = _Relationship(
+                dst_rels._base_uri, rel.rId, rel.reltype,
+                target_mode=RTM.INTERNAL, target=rel.target_part)
 
     # Регистрируем slide в presentation через relationship
     rId = prs.part.relate_to(new_part, RT.SLIDE)
@@ -402,6 +420,21 @@ def build(plan_path, template_path, output_path, donor_map_path):
     p.save(output_path)
     print(f"Saved {output_path}: {len(p.slides)} slides, {pictures_inserted} pictures inserted",
           file=sys.stderr)
+
+    # Финальная структурная валидация (ловит orphan-слайды / битые blip-картинки /
+    # dangling rId — причины «PowerPoint обнаружил проблему с содержимым»).
+    try:
+        from validate_deck import validate_pptx
+        _problems = validate_pptx(output_path)
+        if _problems:
+            print("⚠️  DECK VALIDATION: %d проблем(ы) — PowerPoint может ругаться:"
+                  % len(_problems), file=sys.stderr)
+            for _p in _problems[:30]:
+                print("     -", _p, file=sys.stderr)
+        else:
+            print("✅ DECK VALIDATION: структурно чисто", file=sys.stderr)
+    except Exception as _e:
+        print(f"(validate_deck пропущен: {_e})", file=sys.stderr)
 
 
 def main():

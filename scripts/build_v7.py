@@ -42,7 +42,9 @@ def clone_slide(prs, src_slide):
     Возвращает новый Slide (последний в prs.slides)."""
     from pptx.opc.constants import CONTENT_TYPE as CT
     from pptx.opc.constants import RELATIONSHIP_TYPE as RT
+    from pptx.opc.constants import RELATIONSHIP_TARGET_MODE as RTM
     from pptx.opc.packuri import PackURI
+    from pptx.opc.package import _Relationship
     from pptx.parts.slide import SlidePart
 
     src_part = src_slide.part
@@ -64,12 +66,23 @@ def clone_slide(prs, src_slide):
         package=package,
     )
 
-    # Копируем relationships от source slide в new slide
+    # Копируем relationships, СОХРАНЯЯ оригинальные rId (fix 2026-06-02): relate_to
+    # перенумеровывает rId, из-за чего blip-картинки начинают указывать не на ту
+    # часть (на slideLayout вместо изображения) → PowerPoint «не смог прочитать
+    # часть содержимого». notesSlide-связь НЕ копируем — иначе оригинал-донор
+    # остаётся «сиротой» (notesSlide ссылается назад на него) → PowerPoint repair.
+    dst_rels = new_part.rels
     for rel in src_part.rels.values():
+        if rel.reltype == RT.NOTES_SLIDE:
+            continue
         if rel.is_external:
-            new_part.rels.get_or_add_ext_rel(rel.reltype, rel.target_ref)
+            dst_rels._rels[rel.rId] = _Relationship(
+                dst_rels._base_uri, rel.rId, rel.reltype,
+                target_mode=RTM.EXTERNAL, target=rel.target_ref)
         else:
-            new_part.relate_to(rel.target_part, rel.reltype)
+            dst_rels._rels[rel.rId] = _Relationship(
+                dst_rels._base_uri, rel.rId, rel.reltype,
+                target_mode=RTM.INTERNAL, target=rel.target_part)
 
     # Регистрируем slide в presentation через relationship
     rId = prs.part.relate_to(new_part, RT.SLIDE)
