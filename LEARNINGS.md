@@ -2,6 +2,30 @@
 
 > Каждая итерация добавляет сюда: что не работало → что сделали → ссылка на коммит/файл.
 
+## v2.4.3 — 2026-06-02 — Point 4: взвешенный скоринг по категориям + дельта
+
+Из дизайн-аудита п.4 (взвешенный score вместо бинарного PASS). По решению user —
+тоже внутри `brand_guardian` (не плодить файлы).
+
+### ✅ Что добавилось в brand_guardian
+- **`weighted_score(result)`** — 0-100 по категориям (веса, сумма=100):
+  Color 25 / Typography 25 / Shape 20 / Composition 20 / Content 10. Категория
+  теряет долю веса за issues (violation ≈ 0.5 тяжести, warning ≈ 0.2; ≥1.0 → 0).
+  Плоский `score` (100−20·v−5·w) оставлен для backward-compat; `result["weighted"]`
+  добавлен поверх.
+- **`weighted_deck(pptx)`** — средний взвешенный по деку + средние по категориям.
+- **`score_delta(before, after)`** — дельта «было→стало» по overall и по категориям
+  (для verify-петли: показать, что фикс реально поднял бренд-скор).
+- CLI `brand_guardian` печатает Weighted /100 + разбивку by category.
+
+### Проверено
+`score_delta(before, after)` на Point-2 деках: ИТОГО **30 → 100 (+70)**;
+Color/Typography/Shape 0→max (их чинит нормализация), Composition/Content без изменений.
+
+### Тест
+`tests/point4_scoring/build.py` — Cloud.ru delta-scorecard (ИТОГО было→стало +
+разбивка по категориям с дельтами).
+
 ## v2.4.2 — 2026-06-02 — Point 3: token-diff/конформанс свёрнут в brand_guardian
 
 Из дизайн-аудита п.3 (token-diff: сверка слайда с бренд-контрактом). По решению

@@ -621,6 +621,80 @@ def axis_report(pptx_path):
     return {"slides": slides, "axes": summary, "overall": overall}
 
 
+# ---------------------------------------------------------------------------
+# Взвешенный скоринг по категориям (Point 4). Сумма весов = 100.
+# Плоский score (100−20·v−5·w) остаётся для backward-compat; weighted — поверх.
+# ---------------------------------------------------------------------------
+CATEGORY_WEIGHTS = {
+    "Color": 25,
+    "Typography": 25,
+    "Shape": 20,
+    "Composition": 20,
+    "Content": 10,
+}
+CATEGORY_OF = {
+    # Color
+    "color_off_palette": "Color", "color_near_palette": "Color", "colored_text": "Color",
+    "mixed_palettes": "Color", "extended_without_green": "Color", "green_arrow": "Color",
+    "composition_subtitle_green": "Color",
+    # Typography
+    "font": "Typography", "bold_flag": "Typography", "italic": "Typography",
+    "underline": "Typography", "size_too_small": "Typography", "size_below_comfortable": "Typography",
+    # Shape
+    "rounded_shape": "Shape", "shape_effect": "Shape",
+    # Composition
+    "composition_title_pressed": "Composition", "composition_kpi_inconsistent": "Composition",
+    "composition_peer_inconsistent": "Composition", "composition_title_low": "Composition",
+    # Content / anti-slop
+    "emoji": "Content", "overflow": "Content",
+}
+
+
+def weighted_score(result):
+    """Взвешенный 0-100 по категориям. Каждая категория теряет долю веса за issues:
+    violation ≈ 0.5 «тяжести», warning ≈ 0.2; при ≥ полной тяжести категория → 0.
+    → {'overall': float, 'categories': {cat: score}}."""
+    cat_v = {c: 0 for c in CATEGORY_WEIGHTS}
+    cat_w = {c: 0 for c in CATEGORY_WEIGHTS}
+    for v in result.get("violations", []):
+        cat_v[CATEGORY_OF.get(v.get("type"), "Content")] += 1
+    for w in result.get("warnings", []):
+        cat_w[CATEGORY_OF.get(w.get("type"), "Content")] += 1
+    cats, total = {}, 0.0
+    for c, wt in CATEGORY_WEIGHTS.items():
+        sev = min(1.0, 0.5 * cat_v[c] + 0.2 * cat_w[c])
+        sc = round(wt * (1 - sev), 1)
+        cats[c] = sc
+        total += sc
+    return {"overall": round(total, 1), "categories": cats}
+
+
+def weighted_deck(pptx_path):
+    """Взвешенный скоринг по всему деку: средний overall + средние по категориям.
+    → {'overall': float, 'categories': {cat: avg}, 'slides': [{num, weighted}]}."""
+    p = Presentation(pptx_path)
+    slides = []
+    for i, slide in enumerate(p.slides, 1):
+        r = validate_slide(slide, i)
+        slides.append({"num": i, "weighted": r["weighted"]})
+    n = len(slides) or 1
+    cats = {c: round(sum(s["weighted"]["categories"][c] for s in slides) / n, 1)
+            for c in CATEGORY_WEIGHTS}
+    overall = round(sum(s["weighted"]["overall"] for s in slides) / n, 1)
+    return {"overall": overall, "categories": cats, "slides": slides}
+
+
+def score_delta(before_pptx, after_pptx):
+    """Дельта «было→стало» по взвешенному скорингу (для verify-петли)."""
+    b = weighted_deck(before_pptx)
+    a = weighted_deck(after_pptx)
+    cats = {c: {"before": b["categories"][c], "after": a["categories"][c],
+                "delta": round(a["categories"][c] - b["categories"][c], 1)}
+            for c in CATEGORY_WEIGHTS}
+    return {"before": b["overall"], "after": a["overall"],
+            "delta": round(a["overall"] - b["overall"], 1), "categories": cats}
+
+
 def composition_checks(slide):
     """Композиционные проверки: top padding, subtitle color, KPI size consistency."""
     issues = []
@@ -833,9 +907,11 @@ def validate_slide(slide, slide_num):
             )
         })
 
-    # Score: 100 - 20*violations - 5*warnings
+    # Score: 100 - 20*violations - 5*warnings (плоский, backward-compat)
     score = 100 - 20 * len(result["violations"]) - 5 * len(result["warnings"])
     result["score"] = max(0, score)
+    # Взвешенный скоринг по категориям (Point 4)
+    result["weighted"] = weighted_score(result)
 
     return result
 
@@ -863,9 +939,17 @@ def main():
         report["summary"]["warnings_total"] += len(r["warnings"])
 
     if report["slides"]:
+        n = len(report["slides"])
         report["summary"]["score_avg"] = round(
-            sum(s["score"] for s in report["slides"]) / len(report["slides"]), 1
+            sum(s["score"] for s in report["slides"]) / n, 1
         )
+        report["summary"]["weighted_avg"] = round(
+            sum(s["weighted"]["overall"] for s in report["slides"]) / n, 1
+        )
+        report["summary"]["weighted_categories"] = {
+            c: round(sum(s["weighted"]["categories"][c] for s in report["slides"]) / n, 1)
+            for c in CATEGORY_WEIGHTS
+        }
 
     # Verdict
     if report["summary"]["violations_total"] > 0:
@@ -882,7 +966,12 @@ def main():
     print(f"\n{'=' * 60}", file=sys.stderr)
     print(f"Brand Guardian Report — {pptx_path}", file=sys.stderr)
     print(f"{'=' * 60}", file=sys.stderr)
-    print(f"Verdict: {report['verdict']}  |  Score avg: {report['summary']['score_avg']}/100", file=sys.stderr)
+    print(f"Verdict: {report['verdict']}  |  Score avg: {report['summary']['score_avg']}/100"
+          f"  |  Weighted: {report['summary'].get('weighted_avg', '?')}/100", file=sys.stderr)
+    if report["summary"].get("weighted_categories"):
+        cats = report["summary"]["weighted_categories"]
+        print("  by category: " + "  ".join(f"{c} {cats[c]}/{CATEGORY_WEIGHTS[c]}"
+                                             for c in CATEGORY_WEIGHTS), file=sys.stderr)
     print(f"Slides: {report['n_slides']}  |  Violations: {report['summary']['violations_total']}  |  Warnings: {report['summary']['warnings_total']}", file=sys.stderr)
     print(file=sys.stderr)
 
