@@ -589,6 +589,92 @@ def check_shape_geometry(slide):
     return out
 
 
+def check_slop(slide):
+    """Anti-slop эвристики (AI-tells), которых не ловят остальные чеки:
+      • card_in_card    — крупный filled-прямоугольник внутри другого (вложенные боксы);
+      • rainbow_accents — ≥3 разных акцентных цвета заливок (пёстро);
+      • gradient_text   — gradFill в run (градиентный текст);
+      • muddy_hierarchy — >6 разных кеглей на слайде (мутная иерархия).
+    Все — warnings. Возвращает list issues."""
+    from pptx.enum.shapes import MSO_SHAPE_TYPE
+    issues = []
+    SLIDE_W = 1280 * EMU_PER_PX
+    SLIDE_H = 720 * EMU_PER_PX
+
+    rects = []
+    for idx, sh in enumerate(slide.shapes):
+        try:
+            if sh.shape_type not in (MSO_SHAPE_TYPE.AUTO_SHAPE,):
+                continue
+            fh = _shape_fill_hex(sh)
+            if not fh or not sh.width or not sh.height:
+                continue
+            if sh.width >= 0.96 * SLIDE_W and sh.height >= 0.92 * SLIDE_H:
+                continue  # full-bleed фон — не контейнер
+            rects.append((int(sh.left or 0), int(sh.top or 0),
+                          int(sh.width), int(sh.height), fh.upper()))
+        except Exception:
+            continue
+
+    # card-in-card: крупный filled-rect внутри другого крупного filled-rect
+    MINW, MINH = 150 * EMU_PER_PX, 90 * EMU_PER_PX
+    big = [r for r in rects if r[2] >= MINW and r[3] >= MINH]
+    for a in big:
+        nested = any(
+            b is not a
+            and b[0] >= a[0] - 2 and b[1] >= a[1] - 2
+            and b[0] + b[2] <= a[0] + a[2] + 2 and b[1] + b[3] <= a[1] + a[3] + 2
+            and b[2] * b[3] < a[2] * a[3]
+            for b in big
+        )
+        if nested:
+            issues.append({
+                "type": "card_in_card",
+                "msg": "Карточка внутри карточки — по бренду без вложенных боксов (группировать пространством/выравниванием).",
+            })
+            break
+
+    # rainbow: ≥3 разных акцентных цвета заливок
+    ACCENT = {"#26D07C": "green", "#CFF500": "yellow", "#A068FF": "purple", "#C0E0FC": "blue"}
+    used = set()
+    for r in rects:
+        for ah, nm in ACCENT.items():
+            try:
+                if color_distance(r[4], ah) < 25:
+                    used.add(nm)
+            except Exception:
+                pass
+    if len(used) >= 3:
+        issues.append({
+            "type": "rainbow_accents",
+            "msg": f"Радужные акценты: {len(used)} цвета ({', '.join(sorted(used))}). Зелёный — главный, доп. цвета редко и ≤ зелёного.",
+        })
+
+    # gradient text + muddy hierarchy
+    sizes, grad_text = set(), False
+    for sh in slide.shapes:
+        if not getattr(sh, "has_text_frame", False) or not sh.has_text_frame:
+            continue
+        for para in sh.text_frame.paragraphs:
+            for run in para.runs:
+                if run.font.size:
+                    sizes.add(round(run.font.size.pt))
+                rPr = run._r.find(qn("a:rPr"))
+                if rPr is not None and rPr.find(qn("a:gradFill")) is not None:
+                    grad_text = True
+    if grad_text:
+        issues.append({
+            "type": "gradient_text",
+            "msg": "Градиентный текст — AI-slop. По бренду сплошной графит.",
+        })
+    if len(sizes) > 6:
+        issues.append({
+            "type": "muddy_hierarchy",
+            "msg": f"{len(sizes)} разных кеглей на слайде — мутная иерархия. Свести к шкале (≤6).",
+        })
+    return issues
+
+
 # Сопоставление типов issue → оси отчёта (Color / Typography / Shape).
 AXIS_OF = {
     "color_off_palette": "Color", "color_near_palette": "Color", "colored_text": "Color",
@@ -597,6 +683,8 @@ AXIS_OF = {
     "font": "Typography", "bold_flag": "Typography", "italic": "Typography",
     "underline": "Typography", "size_too_small": "Typography", "size_below_comfortable": "Typography",
     "rounded_shape": "Shape", "shape_effect": "Shape",
+    # anti-slop, маппящиеся на 3 оси (card_in_card — композиция, в axis_report не входит)
+    "rainbow_accents": "Color", "gradient_text": "Color", "muddy_hierarchy": "Typography",
 }
 
 
@@ -645,6 +733,9 @@ CATEGORY_OF = {
     # Composition
     "composition_title_pressed": "Composition", "composition_kpi_inconsistent": "Composition",
     "composition_peer_inconsistent": "Composition", "composition_title_low": "Composition",
+    "card_in_card": "Composition",
+    # anti-slop (Point 5)
+    "rainbow_accents": "Color", "gradient_text": "Color", "muddy_hierarchy": "Typography",
     # Content / anti-slop
     "emoji": "Content", "overflow": "Content",
 }
@@ -837,6 +928,10 @@ def validate_slide(slide, slide_num):
     geom = check_shape_geometry(slide)
     result["violations"].extend(geom["violations"])
     result["warnings"].extend(geom["warnings"])
+
+    # Anti-slop эвристики (AI-tells) — warnings (Point 5)
+    for sl in check_slop(slide):
+        result["warnings"].append(sl)
 
     is_dark = _is_dark_slide(slide)
     result["stats"]["is_dark"] = is_dark
