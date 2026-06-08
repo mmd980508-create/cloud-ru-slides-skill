@@ -136,7 +136,10 @@ GREEN = _from_palette("base", "Green", "#26D07C")
 # Тёмная плашка = #222222 (canonical 2026-05-29, user-decision). НЕ #343F48 —
 # Graphite-Iron не из палитры Cloud.ru.
 DARK_FILL = GRAPHITE
-DASH_GRAY = RGBColor(0x88, 0x88, 0x88)
+# Граница-штрих фреймов (graphite-50): светло-серый #D3D3D3 (правило 2026-06-05).
+# Используется для нижнего штриха L2-панелей и пунктира L3 (НЕ #434343).
+FRAME_STROKE = RGBColor(0xD3, 0xD3, 0xD3)
+DASH_GRAY = RGBColor(0xD3, 0xD3, 0xD3)
 SEPARATOR_GRAY = RGBColor(0xCC, 0xCC, 0xCC)
 # Тело текста в эталонных деках — средний серый (заголовок графит, тело светлее).
 # 3-уровневая иерархия (правило A-6). Сверено по референсам 2026-06-01.
@@ -296,7 +299,7 @@ def add_block(slide, x, y, w, h, lines,
               font_sizes=None, bolds=None,
               caps_first=False, fill="gray", align="left",
               vanchor="top",
-              text_color=None, text_colors=None):
+              text_color=None, text_colors=None, bottom_stroke=None):
     """Прямоугольник с многострочным контентом.
 
     Canonical (правило 2026-05-06):
@@ -322,6 +325,11 @@ def add_block(slide, x, y, w, h, lines,
     shape.fill.fore_color.rgb = rgb_fill
     shape.line.fill.background()
     _no_effects(shape)
+    # Signature нижний штрих узла-компонента (main frame): graphite-50 или зелёный.
+    if bottom_stroke:
+        add_bottom_stroke(slide, x, y, w, h,
+                          color=bottom_stroke.get("color"),
+                          w_pt=bottom_stroke.get("w_pt", 1.0))
 
     tf = shape.text_frame
     tf.word_wrap = True
@@ -458,15 +466,40 @@ def add_orthogonal_arrow(slide, x1, y1, x2, y2, color=None, w_pt=None):
     return add_arrow(slide, jx, y2, x2, y2, with_head=True, color=color, w_pt=w_pt)
 
 
-def add_dashed_rect(slide, x, y, w, h, color=None, w_pt=1.0):
-    """Пунктирная рамка (для группировки phase-блоков)."""
+def add_dashed_rect(slide, x, y, w, h, color=None, w_pt=0.75,
+                    dash_pt=2.0, gap_pt=2.0):
+    """Пунктирная рамка (последний приоритет границ области; макс. ОДИН слой).
+
+    Спец пользователя 2026-06-05: тире = пробел = 2pt, толщина 0.75pt (через
+    `custDash`, d/sp в % от толщины линии).
+    """
     rect = slide.shapes.add_shape(MSO_SHAPE.RECTANGLE, px(x), px(y), px(w), px(h))
     rect.fill.background()
     rect.line.color.rgb = color if color is not None else DASH_GRAY
     rect.line.width = Emu(int(w_pt * 12700))
     ln = rect.line._get_or_add_ln()
-    prstDash = etree.SubElement(ln, qn("a:prstDash"))
-    prstDash.set("val", "dash")
+    base = max(0.1, w_pt)
+    d = int(dash_pt / base * 100000)
+    sp = int(gap_pt / base * 100000)
+    custDash = etree.SubElement(ln, qn("a:custDash"))
+    ds = etree.SubElement(custDash, qn("a:ds"))
+    ds.set("d", str(d))
+    ds.set("sp", str(sp))
+    _no_effects(rect)
+    return rect
+
+
+def add_solid_rect(slide, x, y, w, h, color=None, w_pt=0.75):
+    """Рамка области СПЛОШНОЙ тонкой линией (graphite-50 #D3D3D3, 0.75pt).
+
+    Без заливки — только контур. Предпочтительнее пунктира при необходимости
+    обводки вложенной области (меньше шума).
+    """
+    rect = slide.shapes.add_shape(MSO_SHAPE.RECTANGLE, px(x), px(y), px(w), px(h))
+    rect.fill.background()
+    rect.line.color.rgb = (color if not isinstance(color, str) else _hex(color)) \
+        if color is not None else FRAME_STROKE
+    rect.line.width = Emu(int(w_pt * 12700))
     _no_effects(rect)
     return rect
 
@@ -492,12 +525,26 @@ def snap_panel_to_safe(x, y, w, h, tol=24):
     return left, top, right - left, bottom - top
 
 
-def add_filled_panel(slide, x, y, w, h, label=None, dark=False, fill=None):
-    """Залитая серая панель-секция для группировки в НАГРУЖЕННЫХ схемах — вместо
-    пунктирной рамки (правило 2026-05-29: меньше пунктира, читается чище).
+def add_bottom_stroke(slide, x, y, w, h, color=None, w_pt=1.0):
+    """Нижний штрих фрейма (signature слоёв Cloud.ru): тонкая линия ТОЛЬКО по
+    нижнему краю области. graphite-50 #D3D3D3 для обычных L2, зелёный — для
+    main/component фреймов (акцент). Правило слоёв 2026-06-05."""
+    conn = slide.shapes.add_connector(
+        MSO_CONNECTOR.STRAIGHT, px(x), px(y + h), px(x + w), px(y + h))
+    conn.line.color.rgb = (color if color is not None
+                           else FRAME_STROKE) if not isinstance(color, str) else _hex(color)
+    conn.line.width = Emu(int(w_pt * 12700))
+    _no_effects(conn)
+    return conn
 
-    Рисуется ФОНОМ (до блоков). Внутри — section-title в левом-верхнем углу;
-    сами блоки внутри делать `fill="white"`, чтобы карточки выделялись на сером.
+
+def add_filled_panel(slide, x, y, w, h, label=None, dark=False, fill=None,
+                     bottom_stroke=None):
+    """Залитая панель-секция (слой L2: Fill Gray 100). Рисуется ФОНОМ (до блоков).
+
+    Иерархия границ Cloud.ru (2026-06-05): область выделяется ПРЕИМУЩЕСТВЕННО
+    заливкой; `bottom_stroke={"color":..,"w_pt":..}` добавляет signature нижний
+    штрих (graphite-50 #D3D3D3 или зелёный для main-фреймов). Full-box обводок нет.
     """
     rgb = fill if fill is not None else GRAY
     if isinstance(rgb, str):
@@ -507,6 +554,10 @@ def add_filled_panel(slide, x, y, w, h, label=None, dark=False, fill=None):
     rect.fill.fore_color.rgb = rgb
     rect.line.fill.background()
     _no_effects(rect)
+    if bottom_stroke:
+        add_bottom_stroke(slide, x, y, w, h,
+                          color=bottom_stroke.get("color"),
+                          w_pt=bottom_stroke.get("w_pt", 1.0))
     if label:
         add_label(slide, x + 16, y + 12, w - 32, 22, label,
                   font_size=13, bold=True, caps=True,
@@ -823,6 +874,229 @@ def compose_grid(blocks, area, cols=None, font_pt=16, gap=24,
         b["h"] = row_h[r]
         b["font_sizes"] = [font_pt] * len(b.get("lines", []))
     return blocks
+
+
+# ============================================================================
+# Сетка + выравнивание (canonical v2.5.1, 2026-06-05).
+# Нагруженные схемы (десятки элементов: панели + вложенные таблицы + иконки +
+# стрелки) разваливаются, если каждый блок задан «на глаз». Два прохода чинят это:
+#   1) snap к сетке GRID_STEP — все координаты кратны шагу (ровный ритм);
+#   2) выравнивание осей — близкие края (left/right/top/bottom) стягиваются к
+#      одной оси (вертикали/горизонтали), чтобы колонки и ряды читались как сетка.
+# Оба прохода ИДЕМПОТЕНТНЫ и КОНСЕРВАТИВНЫ (двигают только то, что уже почти
+# выровнено), поэтому не ломают вручную выверенные baseline-схемы.
+# ============================================================================
+GRID_STEP = 8          # px — шаг базовой сетки (1280×720 делится без остатка)
+ALIGN_TOL = 12         # px — порог «почти на одной оси» для стягивания
+
+
+def _snap(v, step=GRID_STEP):
+    """Округлить координату к ближайшему узлу сетки."""
+    return int(round(float(v) / step) * step)
+
+
+def _snap_rect(d, step=GRID_STEP):
+    """Привязать x/y/w/h словаря-фрейма к сетке (мутирует d)."""
+    if "x" in d:
+        d["x"] = _snap(d["x"], step)
+    if "y" in d:
+        d["y"] = _snap(d["y"], step)
+    if "w" in d:
+        d["w"] = max(step, _snap(d["w"], step))
+    if "h" in d:
+        d["h"] = max(step, _snap(d["h"], step))
+    return d
+
+
+def _cluster_axis(values, tol=ALIGN_TOL):
+    """Сгруппировать близкие значения координат в кластеры и вернуть map
+    value→представитель кластера (среднее, привязанное к сетке).
+
+    Жадная одномерная кластеризация: сортируем, режем там, где разрыв > tol.
+    """
+    if not values:
+        return {}
+    uniq = sorted(set(values))
+    clusters = [[uniq[0]]]
+    for v in uniq[1:]:
+        if v - clusters[-1][-1] <= tol:
+            clusters[-1].append(v)
+        else:
+            clusters.append([v])
+    rep = {}
+    for cl in clusters:
+        anchor = _snap(sum(cl) / len(cl))
+        for v in cl:
+            rep[v] = anchor
+    return rep
+
+
+def align_rects(rects, tol=ALIGN_TOL, edges=("left", "top")):
+    """Выровнять фреймы по вертикалям и горизонталям (мутирует rects).
+
+    ТОЛЬКО позиции (left=x, top=y) — НЕ ресайз. Стягиваем близкие левые края к
+    общей вертикали, близкие верхние — к общей горизонтали. Ширину/высоту не
+    трогаем (ресайз через кластеризацию правых/нижних краёв «распирал» таблицы и
+    отрывал их от подписей — отключено 2026-06-05).
+    Элемент может отметить opt-out: rects c "no_align": True не трогаем.
+    """
+    movable = [r for r in rects if isinstance(r, dict)
+               and not r.get("no_align") and "x" in r and "y" in r]
+    if len(movable) < 2:
+        return rects
+    if "left" in edges:
+        rep = _cluster_axis([r["x"] for r in movable], tol)
+        for r in movable:
+            r["x"] = rep.get(r["x"], r["x"])
+    if "top" in edges:
+        rep = _cluster_axis([r["y"] for r in movable], tol)
+        for r in movable:
+            r["y"] = rep.get(r["y"], r["y"])
+    return rects
+
+
+# ============================================================================
+# Таблица внутри схемы (canonical v2.5.1, 2026-06-05).
+# Требование пользователя: если таблица лежит на слайде ВМЕСТЕ с другими
+# объектами (текст, иконки, стрелки, панели — т.е. внутри схемы) — у неё ДОЛЖНЫ
+# быть очерчены края (полная сетка границ). Одиночная таблица на пустом слайде
+# остаётся в zebra-стиле без границ — это отдельный путь table_native, его не
+# трогаем. Внутри flow-схемы таблица по определению среди других элементов →
+# ВСЕГДА рисуется с границами.
+# ============================================================================
+TABLE_BORDER_COLOR = RGBColor(0xC8, 0xC8, 0xC8)   # тонкая серая граница ячеек
+TABLE_HEADER_FILL = RGBColor(0x80, 0x80, 0x80)    # серый бэнд заголовка (Route table)
+
+
+def _readable_text_color(fill):
+    """Подобрать цвет текста (графит/белый) под заливку по яркости (W3C luminance)."""
+    rgb = fill if not isinstance(fill, str) else _hex(fill)
+    try:
+        r, g, b = rgb[0], rgb[1], rgb[2]
+    except Exception:
+        r, g, b = (rgb >> 16) & 255, (rgb >> 8) & 255, rgb & 255
+    lum = (0.299 * r + 0.587 * g + 0.114 * b)
+    return WHITE if lum < 140 else GRAPHITE
+
+
+def _table_cell(slide, x, y, w, h, text, *, font_pt=11, semibold=False,
+                fill=WHITE, text_color=None, align="left",
+                border_color=TABLE_BORDER_COLOR, border_w_pt=0.75):
+    """Одна ячейка таблицы-в-схеме: залитый прямоугольник с ТОНКОЙ ГРАНИЦЕЙ.
+
+    Граница рисуется на самой ячейке (line), поэтому соседние ячейки дают общую
+    сетку без отдельных коннекторов — края очерчены всегда (требование v2.5.1).
+    """
+    cell = slide.shapes.add_shape(MSO_SHAPE.RECTANGLE, px(x), px(y), px(w), px(h))
+    cell.fill.solid()
+    cell.fill.fore_color.rgb = fill if not isinstance(fill, str) else _hex(fill)
+    cell.line.color.rgb = (border_color if not isinstance(border_color, str)
+                           else _hex(border_color))
+    cell.line.width = Emu(int(border_w_pt * 12700))
+    _no_effects(cell)
+    tf = cell.text_frame
+    tf.word_wrap = True
+    # Canonical: текст ячейки по ЛЕВОМУ + ВЕРХНЕМУ краю (правило 2026-06-05).
+    tf.vertical_anchor = MSO_ANCHOR.TOP
+    # Поля ячейки — комфортные и ЕДИНЫЕ (текст не липнет к рамке, правило 2026-06-05).
+    tf.margin_left = Emu(10 * EMU)
+    tf.margin_right = Emu(8 * EMU)
+    tf.margin_top = Emu(4 * EMU)
+    tf.margin_bottom = Emu(3 * EMU)
+    align_enum = {"left": PP_ALIGN.LEFT, "center": PP_ALIGN.CENTER,
+                  "right": PP_ALIGN.RIGHT}.get(align, PP_ALIGN.LEFT)
+    p = tf.paragraphs[0]
+    p.alignment = align_enum
+    run = p.add_run()
+    run.text = str(text)
+    run.font.size = Pt(font_pt)
+    _set_weight(run.font, semibold)
+    run.font.color.rgb = (text_color if text_color is not None
+                          else _readable_text_color(fill))
+    return cell
+
+
+def add_grid_table(slide, x, y, w, rows, *, title=None, title_fill=None,
+                   headers=None, col_fracs=None, font_pt=11,
+                   title_font_pt=12, header_font_pt=11,
+                   row_h=22, title_h=26, header_h=24,
+                   border_color=TABLE_BORDER_COLOR, border_w_pt=0.75,
+                   align="left", header_align="left", title_align="left"):
+    """Мини-таблица внутри схемы с ПОЛНОЙ сеткой границ (требование v2.5.1).
+
+    Структура (всё опционально, кроме rows):
+      - title   — общий бэнд-заголовок во всю ширину (как «Route table 1»),
+                  заливка title_fill (default серый бэнд), текст белый semibold;
+      - headers — строка заголовков колонок (как «Destination | Next Hop»),
+                  semibold графит;
+      - rows    — список строк данных (list[list[str]]).
+    col_fracs — доли ширины колонок (sum≈1); по умолчанию равные.
+    Возвращает (x, y, w, h) фактического bbox — для якорения стрелок.
+    """
+    n_cols = max(
+        (len(headers) if headers else 0),
+        max((len(r) for r in rows), default=1),
+    )
+    n_cols = max(1, n_cols)
+    if col_fracs and len(col_fracs) == n_cols:
+        s = float(sum(col_fracs)) or 1.0
+        widths = [int(w * f / s) for f in col_fracs]
+    else:
+        widths = [int(w / n_cols)] * n_cols
+    widths[-1] = w - sum(widths[:-1])   # добор остатка в последнюю колонку
+    col_x = [x]
+    for cw in widths:
+        col_x.append(col_x[-1] + cw)
+
+    # Авто-высота строки под перенос (требование v2.5.1: нагруженные таблицы с
+    # узкими колонками — текст не должен вылезать за границы). row_h/header_h —
+    # это МИНИМУМ; реальная высота = max(min, число_строк_переноса × line_h).
+    # cell_ws — ширины ячеек строки (для title = [w], т.к. бэнд merged во всю
+    # ширину; иначе per-column — иначе title оценивался бы по 1-й колонке и плашка
+    # ошибочно удваивалась бы).
+    def _row_need_h(cells, fpt, min_h, cell_ws=None):
+        cw_list = cell_ws if cell_ws is not None else widths
+        line_h = 1.18 * (fpt * 4.0 / 3.0)
+        char_w = 0.56 * (fpt * 4.0 / 3.0)
+        max_lines = 1
+        for i, cwid in enumerate(cw_list):
+            val = cells[i] if i < len(cells) else ""
+            usable = max(1, cwid - 2 * 8)        # поля ячейки 8px
+            max_lines = max(max_lines, _wrapped_lines(val, usable, char_w))
+        return max(min_h, int(max_lines * line_h + 5))
+
+    cy = y
+    tfill = title_fill if title_fill is not None else TABLE_HEADER_FILL
+    if isinstance(tfill, str):
+        tfill = _hex(tfill)
+    # 1) Бэнд-заголовок (merged во всю ширину); цвет текста — под яркость бэнда
+    if title:
+        th = _row_need_h([title], title_font_pt, title_h, cell_ws=[w])
+        _table_cell(slide, x, cy, w, th, title,
+                    font_pt=title_font_pt, semibold=True, fill=tfill,
+                    text_color=_readable_text_color(tfill), align=title_align,
+                    border_color=border_color, border_w_pt=border_w_pt)
+        cy += th
+    # 2) Строка заголовков колонок
+    if headers:
+        hh = _row_need_h(headers, header_font_pt, header_h)
+        for i, htext in enumerate(headers):
+            _table_cell(slide, col_x[i], cy, widths[i], hh, htext,
+                        font_pt=header_font_pt, semibold=True, fill=GRAY,
+                        text_color=GRAPHITE, align=header_align,
+                        border_color=border_color, border_w_pt=border_w_pt)
+        cy += hh
+    # 3) Строки данных
+    for r in rows:
+        rh = _row_need_h(r, font_pt, row_h)
+        for i in range(n_cols):
+            val = r[i] if i < len(r) else ""
+            _table_cell(slide, col_x[i], cy, widths[i], rh, val,
+                        font_pt=font_pt, semibold=False, fill=WHITE,
+                        text_color=GRAPHITE, align=align,
+                        border_color=border_color, border_w_pt=border_w_pt)
+        cy += rh
+    return (x, y, w, cy - y)
 
 
 # ============================================================================
@@ -1211,6 +1485,25 @@ def render_flow_diagram_slide(slide, flow_config, dark=False):
             if "id" not in b and "row" in b and "col" in b:
                 b["id"] = "%s,%s" % (b["row"], b["col"])
 
+    tables = flow_config.get("tables", [])
+
+    # 1c'. Сетка + выравнивание (canonical v2.5.1). Нагруженные схемы (панели +
+    #      вложенные таблицы + блоки) расставляются «на глаз» — два прохода чинят
+    #      ритм: snap к GRID_STEP, затем стягивание близких краёв к общим осям
+    #      (вертикали/горизонтали). Идемпотентно, поэтому grid-/preset-режимы и
+    #      выверенные baseline-схемы не страдают. Отключается grid_snap/auto_align=false.
+    alignables = [b for b in blocks if "x" in b] + [t for t in tables if "x" in t]
+    if flow_config.get("grid_snap", True):
+        for r in alignables:
+            _snap_rect(r)
+        # Группы (панели/пунктирные рамки) тоже на сетку — чтобы рамки не «съезжали»
+        # относительно снапнутого контента (правило 2026-06-05).
+        for grp in flow_config.get("groups", []):
+            if "x" in grp:
+                _snap_rect(grp)
+    if flow_config.get("auto_align", True):
+        align_rects(alignables, tol=flow_config.get("align_tol", ALIGN_TOL))
+
     # 1d. Залитые панели-секции (style="panel") — ФОНОМ, до блоков (нагруженные схемы).
     #     Притягиваем края к направляющим safe-area (фреймы до конца, без выхода за поля).
     for grp in flow_config.get("groups", []):
@@ -1218,9 +1511,34 @@ def render_flow_diagram_slide(slide, flow_config, dark=False):
             sx, sy, sw, sh = snap_panel_to_safe(
                 grp["x"], grp["y"], grp["w"], grp["h"])
             add_filled_panel(slide, sx, sy, sw, sh,
-                             label=grp.get("label"), dark=dark, fill=grp.get("fill"))
+                             label=grp.get("label"), dark=dark, fill=grp.get("fill"),
+                             bottom_stroke=grp.get("bottom_stroke"))
 
     blocks_by_id = {}
+
+    # 1e. Таблицы внутри схемы (canonical v2.5.1) — поверх панелей, до блоков/стрелок.
+    #     Внутри схемы таблица соседствует с другими объектами → ВСЕГДА с границами
+    #     (требование пользователя 2026-06-05). Bbox регистрируется по id для стрелок.
+    for tbl in tables:
+        bx, by, bw, bh = add_grid_table(
+            slide, tbl["x"], tbl["y"], tbl["w"], tbl.get("rows", []),
+            title=tbl.get("title"), title_fill=tbl.get("title_fill"),
+            headers=tbl.get("headers"), col_fracs=tbl.get("col_fracs"),
+            font_pt=tbl.get("font_pt", 11),
+            title_font_pt=tbl.get("title_font_pt", 12),
+            header_font_pt=tbl.get("header_font_pt", 11),
+            row_h=tbl.get("row_h", 22),
+            title_h=tbl.get("title_h", 26),
+            header_h=tbl.get("header_h", 24),
+            border_color=tbl.get("border_color", TABLE_BORDER_COLOR),
+            border_w_pt=tbl.get("border_w_pt", 0.75),
+            align=tbl.get("align", "left"),
+            header_align=tbl.get("header_align", "left"),
+            title_align=tbl.get("title_align", "left"),
+        )
+        if "id" in tbl:
+            blocks_by_id[tbl["id"]] = {"x": bx, "y": by, "w": bw, "h": bh,
+                                       "id": tbl["id"]}
     for blk in blocks:
         # Canonical default: align=left, vanchor=top (правило 2026-05-06).
         shape = add_block(
@@ -1233,23 +1551,32 @@ def render_flow_diagram_slide(slide, flow_config, dark=False):
             fill=blk.get("fill", "gray"),
             align=blk.get("align", "left"),
             vanchor=blk.get("vanchor", "top"),
+            bottom_stroke=blk.get("bottom_stroke"),
         )
         if "id" in blk:
             blocks_by_id[blk["id"]] = blk
 
-    # 3. Groups — пунктирная рамка + label (style="panel" уже нарисованы фоном).
+    # 3. Groups — рамка области + label (style="panel" уже нарисованы фоном).
+    #    Иерархия слоёв (2026-06-05): "panel"=заливка + опц. нижний штрих (L2/L1) →
+    #    "line"=сплошная graphite-50 #D3D3D3 0.75pt (2) → default=пунктир L3
+    #    (graphite-50 #D3D3D3, макс. ОДИН слой, тире=пробел=2pt, 0.75pt).
     for grp in flow_config.get("groups", []):
         if grp.get("style") == "panel":
             continue
         gx, gy, gw, gh = snap_panel_to_safe(
             grp["x"], grp["y"], grp["w"], grp["h"])
-        add_dashed_rect(slide, gx, gy, gw, gh)
+        if grp.get("style") == "line":
+            add_solid_rect(slide, gx, gy, gw, gh)
+        else:
+            add_dashed_rect(slide, gx, gy, gw, gh)
         label_text = grp.get("label")
         if label_text:
             label_pos = grp.get("label_pos", "top")
-            label_y = gy + 2 if label_pos == "top" else gy + gh - 20
-            add_label(slide, gx, label_y, gw, 18, label_text,
-                      font_size=12, bold=True, align="center")
+            label_y = gy + 4 if label_pos == "top" else gy + gh - 20
+            # Подпись рамки — по ЛЕВОМУ краю (правило 2026-06-05), с инсетом 8px.
+            add_label(slide, gx + 8, label_y, gw - 16, 18, label_text,
+                      font_size=grp.get("label_size", 12), bold=True,
+                      align=grp.get("label_align", "left"))
 
     # 4. Arrows
     for arr in flow_config.get("arrows", []):
@@ -1281,20 +1608,30 @@ def render_flow_diagram_slide(slide, flow_config, dark=False):
         else:
             x1, y1 = arr["x1"], arr["y1"]
             x2, y2 = arr["x2"], arr["y2"]
+        # Цвет стрелки (опц.): default #434343; зелёный/иной — для смысловой
+        # дифференциации путей по легенде (правило 2026-06-05).
+        a_color = arr.get("color")
+        if isinstance(a_color, str):
+            a_color = _hex(a_color)
         # Диагональ (ветка между разными строкой И колонкой) → ортогональный
         # Z-маршрут вместо запрещённой диагонали. Иначе — прямая.
         if x1 != x2 and y1 != y2:
-            add_orthogonal_arrow(slide, x1, y1, x2, y2, w_pt=arr.get("w_pt"))
+            add_orthogonal_arrow(slide, x1, y1, x2, y2,
+                                 color=a_color, w_pt=arr.get("w_pt"))
         else:
             add_arrow(
                 slide, x1, y1, x2, y2,
                 with_head=arr.get("with_head", True),
                 w_pt=arr.get("w_pt"),
                 dashed=arr.get("dashed", False),
+                color=a_color,
             )
 
     # 5. Labels (произвольные)
     for lab in flow_config.get("labels", []):
+        lab_color = lab.get("color")
+        if isinstance(lab_color, str):
+            lab_color = _hex(lab_color)
         add_label(
             slide,
             lab["x"], lab["y"], lab["w"], lab["h"],
@@ -1303,6 +1640,7 @@ def render_flow_diagram_slide(slide, flow_config, dark=False):
             bold=lab.get("bold", False),
             align=lab.get("align", "left"),
             caps=lab.get("caps", False),
+            color=lab_color,
         )
 
     # 6. Decor (зелёные уголки)

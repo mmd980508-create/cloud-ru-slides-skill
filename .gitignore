@@ -36,4 +36,5 @@ env/
 # Сгенерированные артефакты тестов (создаются build.py; build-скрипты — в репо)
 tests/**/png/
 tests/**/*png/
+tests/**/png*/
 tests/**/*.pptx
